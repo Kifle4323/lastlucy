@@ -12,8 +12,7 @@
     "dev": "npm run dev:api",
     "build": "npm --workspace apps/web run build",
     "lint": "npm --workspace apps/web run lint && npm --workspace apps/api run lint",
-    "prisma": "npm --workspace apps/api run prisma",
-    "postinstall": "npm --prefix apps/api run db:generate"
+    "prisma": "npm --workspace apps/api run prisma"
   },
   "keywords": [],
   "author": "",

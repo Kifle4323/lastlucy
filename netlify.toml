@@ -2,6 +2,7 @@
   base = "apps/web"
   command = "npm install && npm run build"
   publish = "dist"
+  ignore = "git diff --quiet HEAD^ HEAD -- apps/web/"
 
 [build.environment]
   NODE_VERSION = "20"

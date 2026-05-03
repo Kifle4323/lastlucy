@@ -46,7 +46,7 @@ async function main() {
   // 2. Find or create department
   let dept = await prisma.department.findFirst({ where: { code: 'CS' } });
   if (!dept) {
-    dept = await prisma.department.create({ data: { name: 'Computer Science', code: 'CS' } });
+    dept = await prisma.department.create({ data: { name: 'Computer Science', code: 'CS', pricePerCreditHour: 500, totalCreditHours: 140, minCreditHoursToGraduate: 120, durationYears: 5 } });
     console.log('✅ Created department:', dept.name);
   }
 

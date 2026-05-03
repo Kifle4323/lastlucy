@@ -6,7 +6,7 @@ const isLocal = window.location.hostname === 'localhost'
   || window.location.hostname.startsWith('172.16.');
 const API_BASE = isLocal
   ? `http://${window.location.hostname}:4000/api`
-  : 'https://lucy-lms-back.onrender.com/api';
+  : 'https://lastlucy.onrender.com/api';
 
 class ApiClient {
   constructor(baseURL) {

@@ -108,9 +108,13 @@ export function registerAnalyticsRoutes(router: Router) {
   router.get('/analytics/teacher', authRequired, requireRole(['TEACHER']), async (req: AuthedRequest, res: Response) => {
     const user = req.user!;
     try {
-      // Get teacher's sections with enrollments
+      // Get current semester (or most recent if none is current)
+      const currentSemester = await prisma.semester.findFirst({ where: { isCurrent: true } });
+      const targetSemester = currentSemester || await prisma.semester.findFirst({ orderBy: { startDate: 'desc' } });
+
+      // Get teacher's sections for the target semester only
       const sections = await prisma.courseSection.findMany({
-        where: { teacherId: user.id },
+        where: { teacherId: user.id, semesterId: targetSemester?.id },
         include: {
           course: { include: { gradeComponents: true, materials: true, assessments: true } },
           semester: true,

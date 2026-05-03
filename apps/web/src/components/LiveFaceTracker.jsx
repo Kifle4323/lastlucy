@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Video, AlertTriangle, CheckCircle, Camera } from 'lucide-react';
+import { reportFaceAlert } from '../api';
 
 export default function LiveFaceTracker({ active, sessionId, onMismatch, intervalMs = 120000 }) {
   const videoRef = useRef(null);
@@ -106,7 +107,7 @@ export default function LiveFaceTracker({ active, sessionId, onMismatch, interva
     }
   };
 
-  const simulateFacePresenceCheck = () => {
+  const simulateFacePresenceCheck = async () => {
     // In production, send captured frame to a face detection API
     // For demo: 15% chance of "no face detected" (student left)
     const noFaceDetected = Math.random() < 0.15;
@@ -116,6 +117,14 @@ export default function LiveFaceTracker({ active, sessionId, onMismatch, interva
       setMismatchCount(prev => prev + 1);
       if (onMismatch) {
         onMismatch();
+      }
+      // Report to backend so teacher gets notified
+      if (sessionId) {
+        try {
+          await reportFaceAlert(sessionId);
+        } catch (err) {
+          console.error('Failed to report face alert:', err);
+        }
       }
     }
   };

@@ -79,7 +79,7 @@ export default function StudentProfilePage() {
     admissionDate: '',
     checkedInDate: '',
     nationalExamResultTotal: '',
-    // National Exam Results
+    // National Exam Results (Natural Science)
     examEnglish: '',
     examPhysics: '',
     examCivics: '',
@@ -87,6 +87,11 @@ export default function StudentProfilePage() {
     examChemistry: '',
     examBiology: '',
     examAptitude: '',
+    // National Exam Results (Social Science)
+    examHistory: '',
+    examEconomics: '',
+    examGeography: '',
+    examSocialMath: '',
     // Documents
     documents: [],
   });
@@ -120,6 +125,19 @@ export default function StudentProfilePage() {
   };
 
   const handleChange = (field, value) => {
+    // Strip numbers from name fields
+    const nameFields = ['firstName', 'fatherName', 'grandFatherName', 'firstNameLocal', 'fatherNameLocal', 'grandFatherNameLocal', 'motherTongue', 'citizenship', 'country', 'city', 'placeOfBirth'];
+    if (nameFields.includes(field)) {
+      value = value.replace(/[^a-zA-Z\s\u1200-\u137F\u1380-\u139F\u2C80-\u2CFF]/g, '');
+    }
+    // Strip non-digits from phone
+    if (field === 'phone') {
+      value = value.replace(/[^0-9+]/g, '');
+    }
+    // Strip non-digits from tinNumber, accountNumber, nationalIdFan
+    if (field === 'tinNumber' || field === 'accountNumber' || field === 'nationalIdFan') {
+      value = value.replace(/[^0-9]/g, '');
+    }
     setProfile(prev => ({ ...prev, [field]: value }));
     // Clear field error when user types
     if (fieldErrors[field]) {
@@ -201,6 +219,33 @@ export default function StudentProfilePage() {
     reader.readAsDataURL(file);
   };
 
+  // Map field names to sections
+  const fieldSectionMap = {
+    // Personal
+    firstName: 'personal', fatherName: 'personal', grandFatherName: 'personal', firstNameLocal: 'personal', fatherNameLocal: 'personal', grandFatherNameLocal: 'personal',
+    dateOfBirthGC: 'personal', gender: 'personal', placeOfBirth: 'personal', motherTongue: 'personal', healthStatus: 'personal', maritalStatus: 'personal', nationalIdFan: 'personal',
+    economicalStatus: 'personal', areaType: 'personal', tinNumber: 'personal', accountNumber: 'personal',
+    // Location
+    citizenship: 'location', country: 'location', city: 'location', subCity: 'location', kebele: 'location', woreda: 'location', houseNumber: 'location', phone: 'location', email: 'location', pobox: 'location',
+    // Educational
+    stream: 'educational', entryYear: 'educational', sponsorCategory: 'educational', sponsoredBy: 'educational', nationalExamYearEC: 'educational', examinationId: 'educational', admissionDate: 'educational', checkedInDate: 'educational', nationalExamResultTotal: 'educational', examEnglish: 'educational', examMath: 'educational', examScience: 'educational', examSocial: 'educational', totalScore: 'educational',
+  };
+
+  const navigateToFirstError = (errors) => {
+    const errorFields = Object.keys(errors);
+    for (const field of errorFields) {
+      const section = fieldSectionMap[field];
+      if (section && section !== activeSection) {
+        setActiveSection(section);
+        break;
+      }
+    }
+  };
+
+  const getSectionErrorCount = (sectionId) => {
+    return Object.keys(fieldErrors).filter(f => fieldSectionMap[f] === sectionId).length;
+  };
+
   const handleSave = async (submitForApproval = false) => {
     setError('');
     setSuccess('');
@@ -231,7 +276,9 @@ export default function StudentProfilePage() {
         });
         setFieldErrors(errors);
         setError(t('studentProfile.fillRequiredFields'));
-      } else if (err.details) {
+        // Navigate to first section with errors
+        navigateToFirstError(errors);
+      } else if (err.details && Array.isArray(err.details)) {
         // Zod validation errors - show inline
         const errors = {};
         err.details.forEach(d => {
@@ -240,6 +287,8 @@ export default function StudentProfilePage() {
         });
         setFieldErrors(errors);
         setError(t('studentProfile.correctErrors'));
+        // Navigate to first section with errors
+        navigateToFirstError(errors);
       } else {
         setError(err.message || t('studentProfile.failedSaveProfile'));
       }
@@ -352,11 +401,13 @@ export default function StudentProfilePage() {
             { id: 'location', label: t('studentProfile.locationAddress'), icon: MapPin },
             { id: 'educational', label: t('studentProfile.educational'), icon: GraduationCap },
             { id: 'documents', label: t('studentProfile.documents'), icon: FileText },
-          ].map(tab => (
+          ].map(tab => {
+            const errCount = getSectionErrorCount(tab.id);
+            return (
             <button
               key={tab.id}
               onClick={() => setActiveSection(tab.id)}
-              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 whitespace-nowrap transition-colors ${
+              className={`px-4 py-2 rounded-lg font-medium flex items-center gap-2 whitespace-nowrap transition-colors relative ${
                 activeSection === tab.id
                   ? 'bg-primary-900 text-white'
                   : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
@@ -364,8 +415,10 @@ export default function StudentProfilePage() {
             >
               <tab.icon className="w-4 h-4" />
               {tab.label}
+              {errCount > 0 && <span className="ml-1 px-1.5 py-0.5 text-xs bg-red-500 text-white rounded-full">{errCount}</span>}
             </button>
-          ))}
+          );
+          })}
         </div>
 
         {/* Form Sections */}
@@ -500,7 +553,9 @@ export default function StudentProfilePage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">National ID (FAN)</label>
-                  <input type="text" value={profile.nationalIdFan} onChange={(e) => handleChange('nationalIdFan', e.target.value)} className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500" placeholder="Unspecified" />
+                  <input type="text" value={profile.nationalIdFan || ''} onChange={(e) => handleChange('nationalIdFan', e.target.value)} maxLength={16} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.nationalIdFan ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} placeholder="16 digit National ID" />
+                  {fieldErrors.nationalIdFan && <p className="text-red-500 text-xs mt-1">{fieldErrors.nationalIdFan}</p>}
+                  {!fieldErrors.nationalIdFan && profile.nationalIdFan && !/^\d{16}$/.test(profile.nationalIdFan) && <p className="text-yellow-600 text-xs mt-1">National ID must be exactly 16 digits</p>}
                 </div>
               </div>
 
@@ -524,11 +579,13 @@ export default function StudentProfilePage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">TIN Number</label>
-                  <input type="text" value={profile.tinNumber} onChange={(e) => handleChange('tinNumber', e.target.value)} className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500" placeholder="Unspecified" />
+                  <input type="text" value={profile.tinNumber || ''} onChange={(e) => handleChange('tinNumber', e.target.value)} maxLength={10} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.tinNumber ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} placeholder="10 digit TIN" />
+                  {fieldErrors.tinNumber && <p className="text-red-500 text-xs mt-1">{fieldErrors.tinNumber}</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Account Number</label>
-                  <input type="text" value={profile.accountNumber} onChange={(e) => handleChange('accountNumber', e.target.value)} className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500" />
+                  <input type="text" value={profile.accountNumber || ''} onChange={(e) => handleChange('accountNumber', e.target.value)} maxLength={18} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.accountNumber ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} placeholder="10-18 digit account number" />
+                  {fieldErrors.accountNumber && <p className="text-red-500 text-xs mt-1">{fieldErrors.accountNumber}</p>}
                 </div>
               </div>
             </div>
@@ -586,8 +643,9 @@ export default function StudentProfilePage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Phone <span className="text-red-500">*</span></label>
-                  <input type="tel" value={profile.phone} onChange={(e) => handleChange('phone', e.target.value)} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.phone ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} />
+                  <input type="tel" value={profile.phone || ''} onChange={(e) => handleChange('phone', e.target.value)} maxLength={13} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.phone ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} placeholder="e.g. 0912345678" />
                   {fieldErrors.phone && <p className="text-red-500 text-xs mt-1">{fieldErrors.phone}</p>}
+                  {!fieldErrors.phone && profile.phone && !/^(\+?251|0)?9\d{8}$/.test(profile.phone.replace(/\s/g, '')) && <p className="text-yellow-600 text-xs mt-1">Enter Ethiopian format: 09xxxxxxxx or +2519xxxxxxxx</p>}
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Email</label>
@@ -653,28 +711,60 @@ export default function StudentProfilePage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">National Exam Result Total</label>
-                <input type="number" value={profile.nationalExamResultTotal} onChange={(e) => handleChange('nationalExamResultTotal', parseInt(e.target.value))} className="w-full max-w-xs px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500" />
+                <input type="number" value={profile.nationalExamResultTotal || ''} onChange={(e) => handleChange('nationalExamResultTotal', e.target.value === '' ? '' : parseInt(e.target.value))} className={`w-full max-w-xs px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors.nationalExamResultTotal ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} />
+                {fieldErrors.nationalExamResultTotal && <p className="text-red-500 text-xs mt-1">{fieldErrors.nationalExamResultTotal}</p>}
+                {(() => {
+                  const examFields = ['examEnglish', 'examPhysics', 'examCivics', 'examNaturalMath', 'examChemistry', 'examBiology', 'examAptitude', 'examHistory', 'examEconomics', 'examGeography', 'examSocialMath'];
+                  const sum = examFields.reduce((s, f) => s + (parseInt(profile[f]) || 0), 0);
+                  const total = parseInt(profile.nationalExamResultTotal) || 0;
+                  if (sum > 0 && total > 0 && total !== sum) return <p className="text-yellow-600 text-xs mt-1">Sum of subjects = {sum}, but total = {total}. They must match.</p>;
+                  if (sum > 0 && !total) return <p className="text-gray-500 text-xs mt-1">Sum of subjects: {sum}</p>;
+                  return null;
+                })()}
               </div>
 
               <hr className="border-gray-200 dark:border-gray-700" />
 
               <h3 className="text-md font-semibold text-gray-900 dark:text-white">National Exam Subject Level Result</h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {[
-                  { field: 'examEnglish', label: 'English' },
-                  { field: 'examPhysics', label: 'Physics' },
-                  { field: 'examCivics', label: 'Civics' },
-                  { field: 'examNaturalMath', label: 'Natural Math' },
-                  { field: 'examChemistry', label: 'Chemistry' },
-                  { field: 'examBiology', label: 'Biology' },
-                  { field: 'examAptitude', label: 'Aptitude' },
-                ].map(item => (
-                  <div key={item.field}>
-                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{item.label}</label>
-                    <input type="number" value={profile[item.field]} onChange={(e) => handleChange(item.field, parseInt(e.target.value))} className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500" />
-                  </div>
-                ))}
-              </div>
+              {profile.stream === 'Social Science' ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { field: 'examEnglish', label: 'English' },
+                    { field: 'examCivics', label: 'Civics' },
+                    { field: 'examHistory', label: 'History' },
+                    { field: 'examEconomics', label: 'Economics' },
+                    { field: 'examGeography', label: 'Geography' },
+                    { field: 'examSocialMath', label: 'Social Math' },
+                    { field: 'examAptitude', label: 'Aptitude' },
+                  ].map(item => (
+                    <div key={item.field}>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{item.label}</label>
+                      <input type="number" min="0" max="100" value={profile[item.field] || ''} onChange={(e) => handleChange(item.field, e.target.value === '' ? '' : parseInt(e.target.value))} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors[item.field] ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} />
+                      {fieldErrors[item.field] && <p className="text-red-500 text-xs mt-1">{fieldErrors[item.field]}</p>}
+                      {profile[item.field] && parseInt(profile[item.field]) > 100 && <p className="text-yellow-600 text-xs mt-1">Cannot exceed 100</p>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {[
+                    { field: 'examEnglish', label: 'English' },
+                    { field: 'examPhysics', label: 'Physics' },
+                    { field: 'examCivics', label: 'Civics' },
+                    { field: 'examNaturalMath', label: 'Natural Math' },
+                    { field: 'examChemistry', label: 'Chemistry' },
+                    { field: 'examBiology', label: 'Biology' },
+                    { field: 'examAptitude', label: 'Aptitude' },
+                  ].map(item => (
+                    <div key={item.field}>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{item.label}</label>
+                      <input type="number" min="0" max="100" value={profile[item.field] || ''} onChange={(e) => handleChange(item.field, e.target.value === '' ? '' : parseInt(e.target.value))} className={`w-full px-4 py-3 border dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 ${fieldErrors[item.field] ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'}`} />
+                      {fieldErrors[item.field] && <p className="text-red-500 text-xs mt-1">{fieldErrors[item.field]}</p>}
+                      {profile[item.field] && parseInt(profile[item.field]) > 100 && <p className="text-yellow-600 text-xs mt-1">Cannot exceed 100</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 

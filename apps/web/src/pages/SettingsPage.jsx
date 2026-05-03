@@ -130,6 +130,17 @@ export default function SettingsPage() {
     setProfileSuccess('');
     setProfileLoading(true);
 
+    if (!fullName.trim()) {
+      setProfileError(t('register.fullNameRequired'));
+      setProfileLoading(false);
+      return;
+    }
+    if (/\d/.test(fullName)) {
+      setProfileError(t('register.nameNoNumbers'));
+      setProfileLoading(false);
+      return;
+    }
+
     try {
       await updateMyProfile({
         fullName: fullName.trim(),
@@ -280,7 +291,7 @@ export default function SettingsPage() {
               <input
                 type="text"
                 value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
+                onChange={(e) => setFullName(e.target.value.replace(/[^a-zA-Z\s\u1200-\u137F\u1380-\u139F\u2C80-\u2CFF]/g, ''))}
                 className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
                 placeholder={t('settings.enterFullName')}
               />

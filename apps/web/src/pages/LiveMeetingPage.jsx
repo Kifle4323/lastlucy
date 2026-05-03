@@ -419,6 +419,11 @@ export default function LiveMeetingPage() {
                     <p className="text-white text-sm font-medium">{att.student?.fullName}</p>
                     <p className="text-gray-500 text-xs">
                       {att.duration ? `${att.duration} min` : t('liveSession.inSession')}
+                      {att.faceAlerts > 0 && (
+                        <span className="text-red-400 ml-2">
+                          ⚠ {att.faceAlerts} face alert{att.faceAlerts !== 1 ? 's' : ''}
+                        </span>
+                      )}
                     </p>
                   </div>
                 </div>

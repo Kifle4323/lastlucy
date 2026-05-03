@@ -1,8 +1,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { Video, AlertTriangle, CheckCircle, Camera } from 'lucide-react';
-import { createFaceVerification } from '../api';
+import { createFaceVerification, createVideoFaceVerification } from '../api';
 
-export default function FaceTracker({ active, attemptId, profileImage, onMismatch, intervalMs = 60000 }) {
+export default function FaceTracker({ active, attemptId, materialId, profileImage, onMismatch, intervalMs = 60000 }) {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
   const [stream, setStream] = useState(null);
@@ -114,7 +114,7 @@ export default function FaceTracker({ active, attemptId, profileImage, onMismatc
   };
 
   const simulateFaceCheck = async (capturedImage) => {
-    if (!attemptId) return;
+    if (!attemptId && !materialId) return;
     
     // In production, this would call a face recognition API
     // For demo purposes, we simulate a mismatch detection (20% chance)
@@ -123,7 +123,11 @@ export default function FaceTracker({ active, attemptId, profileImage, onMismatc
     try {
       // Create face verification record for every capture
       // matchResult = true means face matched, false means mismatch
-      await createFaceVerification(attemptId, capturedImage, !isMismatch);
+      if (materialId) {
+        await createVideoFaceVerification(materialId, capturedImage, !isMismatch);
+      } else if (attemptId) {
+        await createFaceVerification(attemptId, capturedImage, !isMismatch);
+      }
       setVerificationCreated(true);
       
       if (isMismatch && onMismatch) {

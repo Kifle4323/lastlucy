@@ -25,7 +25,7 @@ export default function CompleteProfilePage() {
     // Check if profile is already complete
     getProfileStatus().then(status => {
       if (status.isProfileComplete) {
-        navigate('/');
+        navigate('/dashboard');
       }
     });
   }, [navigate]);
@@ -116,7 +116,7 @@ export default function CompleteProfilePage() {
         profileImage: capturedImage,
       });
       await refreshUser();
-      navigate('/');
+      navigate('/dashboard');
     } catch (err) {
       setError(err.message || t('studentProfile.failedSaveProfile'));
     } finally {

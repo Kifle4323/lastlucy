@@ -7,11 +7,12 @@ import {
   proposeEarlyExam, cancelEarlyExamProposal, getEarlyExamResponses, confirmEarlyExam,
   getLiveAttendanceStats, syncAttendanceToGrades,
   createManualAttendance, getManualAttendanceSessions, deleteManualAttendanceSession,
-  getGradeComponents
+  getGradeComponents, setAttendance, getGradebook
 } from '../api.js';
 import Layout from '../components/Layout';
 import { useToast } from '../ToastContext';
 import { useConfirm } from '../ConfirmContext';
+import { CheckCircle, AlertTriangle } from 'lucide-react';
 
 export default function TeacherGradesPage() {
   const [searchParams] = useSearchParams();
@@ -30,6 +31,8 @@ export default function TeacherGradesPage() {
   const [manualForm, setManualForm] = useState({ title: '', date: '' });
   const [manualRecords, setManualRecords] = useState({}); // { studentId: status }
   const [gradeConfig, setGradeConfig] = useState(null);
+  const [gradebook, setGradebook] = useState(null);
+  const [attendanceScores, setAttendanceScores] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
@@ -38,12 +41,13 @@ export default function TeacherGradesPage() {
   // Exam schedule form
   const [examForm, setExamForm] = useState({
     examType: 'MIDTERM',
-    duration: 60,
-    location: '',
-    instructions: '',
-    weight: 30,
     examDate: '',
     examTime: '09:00',
+    duration: 60,
+    location: '',
+    isOnline: false,
+    instructions: '',
+    weight: 30,
     proposeEarly: false,
     proposedDate: '',
     proposedTime: '09:00',
@@ -107,6 +111,26 @@ export default function TeacherGradesPage() {
       setStudents(studentsData);
       setExamSchedules(examsData);
       setGradeConfig(componentsData || []);
+      // Auto-fill exam weight from grade component
+      const comps = componentsData || [];
+      const midtermComp = comps.find(c => c.name === 'Midterm');
+      if (midtermComp) {
+        setExamForm(prev => ({ ...prev, weight: midtermComp.weight }));
+      }
+      // Load gradebook for attendance view
+      try {
+        const gbData = await getGradebook(section.courseId);
+        setGradebook(gbData);
+        const attMap = {};
+        (gbData.gradebook || []).forEach(g => {
+          const attComponent = (gbData.components || []).find(c => c.name === 'Attendance');
+          const percent = attComponent && g.componentPercentages ? g.componentPercentages[attComponent.id] || 0 : 0;
+          attMap[g.student.id] = percent;
+        });
+        setAttendanceScores(attMap);
+      } catch {
+        setGradebook(null);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -217,12 +241,12 @@ export default function TeacherGradesPage() {
       const data = {
         courseSectionId: selectedSection.id,
         examType: examForm.examType,
+        examDate: examForm.examDate + 'T' + examForm.examTime,
         duration: examForm.duration,
-        location: examForm.location,
+        location: examForm.isOnline ? null : examForm.location,
+        isOnline: examForm.isOnline,
         instructions: examForm.instructions,
         weight: examForm.weight,
-        // Teacher-set exam date and time
-        examDate: examForm.examDate + 'T' + examForm.examTime,
         // Include early exam proposal if checked
         ...(examForm.proposeEarly && {
           proposedDate: examForm.proposedDate + 'T' + examForm.proposedTime,
@@ -233,12 +257,13 @@ export default function TeacherGradesPage() {
       setExamSchedules([...examSchedules, newExam]);
       setExamForm({
         examType: 'MIDTERM',
-        duration: 60,
-        location: '',
-        instructions: '',
-        weight: 30,
         examDate: '',
         examTime: '09:00',
+        duration: 60,
+        location: '',
+        isOnline: false,
+        instructions: '',
+        weight: 30,
         proposeEarly: false,
         proposedDate: '',
         proposedTime: '09:00',
@@ -266,6 +291,7 @@ export default function TeacherGradesPage() {
         examType: 'MIDTERM',
         duration: 60,
         location: '',
+        isOnline: false,
         instructions: '',
         weight: 30,
         examDate: '',
@@ -375,6 +401,35 @@ export default function TeacherGradesPage() {
     } catch (err) {
       toast.error(err.message);
     }
+  }
+
+  function handleAttendanceChange(studentId, value) {
+    setAttendanceScores({ ...attendanceScores, [studentId]: Math.round(parseFloat(value) || 0) });
+  }
+
+  async function handleSaveAttendanceScore(studentId) {
+    if (attendanceScores[studentId] === undefined) return;
+    try {
+      await setAttendance(selectedSection.courseId, studentId, attendanceScores[studentId]);
+      toast.success(t('grade.attendanceSaved'));
+    } catch (err) {
+      toast.error(err.message);
+    }
+  }
+
+  async function handleSaveAllAttendanceScores() {
+    setSaving(true);
+    try {
+      const promises = Object.entries(attendanceScores).map(([studentId, score]) => {
+        if (score === undefined) return Promise.resolve();
+        return setAttendance(selectedSection.courseId, studentId, score);
+      });
+      await Promise.all(promises);
+      toast.success(t('grade.allAttendanceSaved'));
+    } catch (err) {
+      toast.error(err.message);
+    }
+    setSaving(false);
   }
 
   async function loadLiveAttendance() {
@@ -488,26 +543,66 @@ export default function TeacherGradesPage() {
         {/* Sections List */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow p-4">
           <h2 className="font-semibold mb-3 text-gray-900 dark:text-white">{t('grade.myCourseSections')}</h2>
-          <div className="space-y-2">
-            {sections.map(section => (
-              <button
-                key={section.id}
-                onClick={() => selectSection(section)}
-                className={`w-full text-left p-3 rounded border ${
-                  selectedSection?.id === section.id
-                    ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-500 dark:border-blue-400'
-                    : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-gray-200 dark:border-gray-700'
-                }`}
-              >
-                <div className="font-medium text-gray-900 dark:text-white">{section.course?.title}</div>
-                <div className="text-sm text-gray-500 dark:text-gray-400">
-                  {section.class?.name} | {section.sectionCode}
-                </div>
-                <div className="text-xs text-gray-400 dark:text-gray-500">
-                  {section.semester?.name} | {section._count?.enrollments || 0} {t('nav.students')}
-                </div>
-              </button>
-            ))}
+          <div className="space-y-3">
+            {(() => {
+              const withClass = sections.filter(s => s.classId && s.class);
+              const withoutClass = sections.filter(s => !s.classId || !s.class);
+              const classMap = new Map();
+              withClass.forEach(s => {
+                if (!classMap.has(s.classId)) classMap.set(s.classId, { class: s.class, sections: [] });
+                classMap.get(s.classId).sections.push(s);
+              });
+              return (
+                <>
+                  {Array.from(classMap.values()).map(({ class: cls, sections: classSections }) => (
+                    <div key={cls.id}>
+                      <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 px-1">{cls.name} <span className="normal-case tracking-normal font-normal">({cls.code})</span></div>
+                      <div className="space-y-1.5">
+                        {classSections.map(section => (
+                          <button
+                            key={section.id}
+                            onClick={() => selectSection(section)}
+                            className={`w-full text-left p-2.5 rounded border ${
+                              selectedSection?.id === section.id
+                                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-500 dark:border-blue-400'
+                                : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-gray-200 dark:border-gray-700'
+                            }`}
+                          >
+                            <div className="font-medium text-sm text-gray-900 dark:text-white">{section.course?.title}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                              {section.sectionCode} | {section._count?.enrollments || 0} {t('nav.students')}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {withoutClass.length > 0 && (
+                    <div>
+                      <div className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1 px-1">{t('myClasses.otherCourseSections')}</div>
+                      <div className="space-y-1.5">
+                        {withoutClass.map(section => (
+                          <button
+                            key={section.id}
+                            onClick={() => selectSection(section)}
+                            className={`w-full text-left p-2.5 rounded border ${
+                              selectedSection?.id === section.id
+                                ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-500 dark:border-blue-400'
+                                : 'hover:bg-gray-50 dark:hover:bg-gray-700 border-gray-200 dark:border-gray-700'
+                            }`}
+                          >
+                            <div className="font-medium text-sm text-gray-900 dark:text-white">{section.course?.title}</div>
+                            <div className="text-xs text-gray-500 dark:text-gray-400">
+                              {section.sectionCode} | {section._count?.enrollments || 0} {t('nav.students')}
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              );
+            })()}
             {sections.length === 0 && (
               <p className="text-gray-500 text-sm">{t('grade.noSectionsAssigned')}</p>
             )}
@@ -552,21 +647,111 @@ export default function TeacherGradesPage() {
               {/* Grades Tab */}
               {activeTab === 'grades' && (
                 <>
-                  <div className="flex justify-end gap-3 mb-4">
-                    <button
-                      onClick={syncFromAssessments}
-                      disabled={saving}
-                      className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
-                    >
-                      {saving ? t('grade.syncing') : t('grade.syncFromAssessments')}
-                    </button>
-                    <button
-                      onClick={submitAllGrades}
-                      className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
-                    >
-                      {t('grade.submitAllGrades')}
-                    </button>
-                  </div>
+                  {selectedSection?.allGradesSubmitted ? (
+                    <>
+                      {/* Completed Course - Read-only Results View */}
+                      <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4 mb-4 flex items-center gap-3">
+                        <CheckCircle className="w-5 h-5 text-green-600" />
+                        <div>
+                          <p className="font-medium text-gray-900 dark:text-white">{t('myClasses.completed')}</p>
+                          <p className="text-sm text-gray-500 dark:text-gray-400">{t('grade.courseCompletedReadOnly')}</p>
+                        </div>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
+                              <th className="text-left p-3 text-gray-700 dark:text-gray-300">{t('nav.students')}</th>
+                              {(Array.isArray(gradeConfig) ? gradeConfig : []).map(comp => (
+                                <th key={comp.id} className="text-center p-3 text-gray-700 dark:text-gray-300">
+                                  {comp.name}<br/><span className="text-xs text-gray-400">/{comp.weight}</span>
+                                </th>
+                              ))}
+                              <th className="text-center p-3 text-gray-700 dark:text-gray-300">{t('common.total')}</th>
+                              <th className="text-center p-3 text-gray-700 dark:text-gray-300">{t('grade.grade')}</th>
+                              <th className="text-center p-3 text-gray-700 dark:text-gray-300">{t('grade.gradePoint')}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {students.map(student => {
+                              const comps = Array.isArray(gradeConfig) ? gradeConfig : [];
+                              const getCompField = (name) => {
+                                if (name === 'Quiz') return 'quizScore';
+                                if (name === 'Assignment') return 'assignmentScore';
+                                if (name === 'Midterm') return 'midtermScore';
+                                if (name === 'Final') return 'finalScore';
+                                if (name === 'Attendance') return 'attendanceScore';
+                                return name.toLowerCase() + 'Score';
+                              };
+                              return (
+                              <tr key={student.id} className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700">
+                                <td className="p-3">
+                                  <div className="font-medium text-gray-900 dark:text-white">{student.student?.fullName}</div>
+                                  <div className="text-xs text-gray-500 dark:text-gray-400">{student.student?.email}</div>
+                                </td>
+                                {comps.map(comp => (
+                                  <td key={comp.id} className="p-3 text-center text-gray-900 dark:text-white">
+                                    {student.grade?.[getCompField(comp.name)] ?? '-'}
+                                  </td>
+                                ))}
+                                <td className="p-3 text-center font-semibold text-gray-900 dark:text-white">
+                                  {student.grade?.totalScore ?? '-'}
+                                </td>
+                                <td className="p-3 text-center">
+                                  {student.grade?.gradeLetter ? (
+                                    <span className={`px-2 py-1 rounded text-white text-xs font-bold ${
+                                      student.grade.gradeLetter.startsWith('A') ? 'bg-green-600' :
+                                      student.grade.gradeLetter.startsWith('B') ? 'bg-blue-600' :
+                                      student.grade.gradeLetter.startsWith('C') ? 'bg-yellow-600' :
+                                      student.grade.gradeLetter === 'D' ? 'bg-orange-600' :
+                                      'bg-red-600'
+                                    }`}>
+                                      {student.grade.gradeLetter}
+                                    </span>
+                                  ) : '-'}
+                                </td>
+                                <td className="p-3 text-center text-gray-900 dark:text-white">
+                                  {student.grade?.gradePoint ?? '-'}
+                                </td>
+                              </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                      {students.length === 0 && (
+                        <p className="text-gray-500 text-center py-8">{t('grade.noStudentsEnrolled')}</p>
+                      )}
+                    </>
+                  ) : selectedSection?.semesterStatus && selectedSection.semesterStatus !== 'IN_PROGRESS' && selectedSection.semesterStatus !== 'GRADING' ? (
+                    <>
+                      {/* Semester Not Started - Blocked */}
+                      <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-lg p-6 mb-4 flex items-start gap-4">
+                        <AlertTriangle className="w-6 h-6 text-yellow-600 dark:text-yellow-400 flex-shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold text-yellow-800 dark:text-yellow-300">{t('grade.semesterNotStarted')}</p>
+                          <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">{t('grade.semesterNotStartedDesc', { status: selectedSection.semesterStatus?.replace('_', ' ') })}</p>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      {/* Current Course - Editable Grade Entry */}
+                      <div className="flex justify-end gap-3 mb-4">
+                        <button
+                          onClick={syncFromAssessments}
+                          disabled={saving}
+                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2"
+                        >
+                          {saving ? t('grade.syncing') : t('grade.syncFromAssessments')}
+                        </button>
+                        <button
+                          onClick={submitAllGrades}
+                          className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700"
+                        >
+                          {t('grade.submitAllGrades')}
+                        </button>
+                      </div>
 
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
@@ -659,18 +844,18 @@ export default function TeacherGradesPage() {
                   {students.length === 0 && (
                     <p className="text-gray-500 text-center py-8">{t('grade.noStudentsEnrolled')}</p>
                   )}
+                    </>
+                  )}
                 </>
               )}
 
               {/* Attendance Tab */}
               {activeTab === 'attendance' && (
-                <div>
-                  <div className="flex justify-between items-center mb-4">
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center">
                     <div>
                       <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{t('grade.attendanceTracking')}</h3>
-                      <p className="text-sm text-gray-500 dark:text-gray-400">
-                        {t('grade.attendanceDescription')}
-                      </p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">{t('grade.attendanceDescription')}</p>
                     </div>
                     <div className="flex gap-2">
                       <button
@@ -691,7 +876,7 @@ export default function TeacherGradesPage() {
 
                   {/* Manual Attendance Entry Form */}
                   {showManualForm && (
-                    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 mb-6">
+                    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
                       <div className="flex justify-between items-center mb-4">
                         <h4 className="font-semibold text-gray-900 dark:text-white">{t('grade.takeFaceToFaceAttendance')}</h4>
                         <button onClick={() => setShowManualForm(false)} className="text-gray-400 hover:text-gray-600">✕</button>
@@ -769,19 +954,119 @@ export default function TeacherGradesPage() {
                     </div>
                   )}
 
-                  {!liveAttendance ? (
-                    <div className="text-center py-8">
-                      <p className="text-gray-500">{t('grade.loadingAttendance')}</p>
-                    </div>
-                  ) : liveAttendance.totalSessions === 0 && manualSessions.length === 0 ? (
-                    <div className="text-center py-12 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                      <p className="text-gray-500 dark:text-gray-400 text-lg">{t('grade.noAttendanceRecords')}</p>
-                      <p className="text-gray-400 dark:text-gray-500 text-sm mt-1">{t('grade.noAttendanceRecordsDesc')}</p>
-                    </div>
-                  ) : (
-                    <>
-                      {/* Summary Cards */}
-                      <div className="grid grid-cols-4 gap-4 mb-6">
+                  {/* Attendance Score Entry - Grouped by Class (same as GradebookPage) */}
+                  {gradebook && (() => {
+                    const classGroups = {};
+                    (gradebook.gradebook || []).forEach(g => {
+                      const cls = g.student.className || 'Unassigned';
+                      if (!classGroups[cls]) classGroups[cls] = [];
+                      classGroups[cls].push(g);
+                    });
+                    const classNames = Object.keys(classGroups).sort();
+
+                    return (
+                      <div className="space-y-6">
+                        {classNames.map(cls => (
+                          <div key={cls} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden">
+                            <div className="p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900/30 rounded-lg flex items-center justify-center">
+                                    <span className="text-blue-700 dark:text-blue-400 font-medium text-sm">
+                                      {cls.charAt(0)}
+                                    </span>
+                                  </div>
+                                  <div>
+                                    <h3 className="font-semibold text-gray-900 dark:text-white">{cls}</h3>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400">{classGroups[cls].length} student{classGroups[cls].length !== 1 ? 's' : ''}</p>
+                                  </div>
+                                </div>
+                                <button
+                                  onClick={() => {
+                                    const promises = classGroups[cls].map(g =>
+                                      setAttendance(selectedSection.courseId, g.student.id, attendanceScores[g.student.id] || 0)
+                                    );
+                                    Promise.all(promises).then(() => toast.success(t('grade.allAttendanceSaved'))).catch(() => toast.error('Failed to save'));
+                                  }}
+                                  disabled={saving}
+                                  className="px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white text-sm font-medium rounded-lg inline-flex items-center gap-1"
+                                >
+                                  {t('grade.saveAllAttendance')}
+                                </button>
+                              </div>
+                            </div>
+
+                            <table className="w-full text-sm">
+                              <thead className="bg-gray-50 dark:bg-gray-700">
+                                <tr>
+                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">{t('gradebook.student')}</th>
+                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-32">{t('gradebook.score')}</th>
+                                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase w-24">{t('common.actions')}</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                                {classGroups[cls].map(g => (
+                                  <tr key={g.student.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                    <td className="px-6 py-4">
+                                      <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center">
+                                          <span className="text-blue-700 dark:text-blue-400 font-medium text-sm">
+                                            {g.student.fullName?.charAt(0) || '?'}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <p className="font-medium text-gray-900 dark:text-white">{g.student.fullName}</p>
+                                          <p className="text-xs text-gray-500 dark:text-gray-400">{g.student.email}</p>
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <div className="flex items-center gap-2">
+                                        <input
+                                          type="number"
+                                          min="0"
+                                          max="100"
+                                          step="1"
+                                          value={attendanceScores[g.student.id] || 0}
+                                          onChange={(e) => handleAttendanceChange(g.student.id, e.target.value)}
+                                          className="w-20 px-2 py-1 border border-gray-200 dark:border-gray-600 rounded text-center bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                        />
+                                        <span className="text-gray-500 dark:text-gray-400">/100</span>
+                                      </div>
+                                    </td>
+                                    <td className="px-6 py-4">
+                                      <button
+                                        onClick={() => handleSaveAttendanceScore(g.student.id)}
+                                        className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded"
+                                      >
+                                        {t('common.save')}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ))}
+
+                        <div className="flex justify-end">
+                          <button
+                            onClick={handleSaveAllAttendanceScores}
+                            disabled={saving}
+                            className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white font-medium rounded-lg inline-flex items-center gap-2"
+                          >
+                            {t('grade.saveAllAttendance')}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Cumulative Attendance Stats */}
+                  {liveAttendance && liveAttendance.totalSessions > 0 && (
+                    <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
+                      <h4 className="font-semibold text-gray-900 dark:text-white mb-4">{t('grade.cumulativeAttendance')}</h4>
+                      <div className="grid grid-cols-4 gap-4 mb-4">
                         <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-center">
                           <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{liveAttendance.totalSessions || 0}</p>
                           <p className="text-sm text-blue-600 dark:text-blue-300">{t('grade.totalSessions')}</p>
@@ -800,17 +1085,14 @@ export default function TeacherGradesPage() {
                         </div>
                       </div>
 
-                      {/* Info Banner */}
                       <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-3 mb-4">
                         <p className="text-blue-700 dark:text-blue-300 text-sm">
-                          <strong>Scoring (cumulative):</strong> Live: Attended=100%, Partial=50%, Absent=0% | In-Person: Present=100%, Late=75%, Excused=50%, Absent=0%. 
+                          <strong>Scoring (cumulative):</strong> Live: Attended=100%, Partial=50%, Absent=0% | In-Person: Present=100%, Late=75%, Excused=50%, Absent=0%.
                           Final score = average across all sessions. Click "Sync to Grades" to apply.
                         </p>
                       </div>
 
-                      {/* Student Cumulative Attendance Table */}
-                      <div className="overflow-x-auto mb-6">
-                        <h4 className="font-semibold text-gray-900 dark:text-white mb-3">{t('grade.cumulativeAttendance')}</h4>
+                      <div className="overflow-x-auto mb-4">
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700">
@@ -872,7 +1154,7 @@ export default function TeacherGradesPage() {
 
                       {/* Manual Attendance History */}
                       {manualSessions.length > 0 && (
-                        <div>
+                        <div className="mt-4">
                           <h4 className="font-semibold text-gray-900 dark:text-white mb-3">{t('grade.inPersonAttendanceHistory')}</h4>
                           <div className="space-y-3">
                             {manualSessions.map(session => (
@@ -915,7 +1197,7 @@ export default function TeacherGradesPage() {
                           </div>
                         </div>
                       )}
-                    </>
+                    </div>
                   )}
                 </div>
               )}
@@ -926,99 +1208,165 @@ export default function TeacherGradesPage() {
                   {/* Exam Form */}
                   <div className="border border-gray-200 dark:border-gray-700 rounded p-4 bg-gray-50 dark:bg-gray-800">
                     <h3 className="font-semibold mb-4 text-gray-900 dark:text-white">
-                      {editingExam ? t('grade.editExamDetails') : t('grade.createExamSchedule')}
+                      {t('grade.examSchedule')}
                     </h3>
-                    {!editingExam && selectedSection?.semester?.midtermExamDate && (
-                      <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm">
-                        <p className="font-medium text-blue-800">{t('grade.officialExamDates')}</p>
-                        <p className="text-blue-700">{t('results.midterm')}: {new Date(selectedSection.semester.midtermExamDate).toLocaleString()}</p>
-                        <p className="text-blue-700">{t('results.final')}: {selectedSection?.semester?.finalExamDate ? new Date(selectedSection.semester.finalExamDate).toLocaleString() : t('grade.notSet')}</p>
-                      </div>
-                    )}
-                    <form onSubmit={editingExam ? handleUpdateExam : handleCreateExam} className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examType')}</label>
-                          <select
-                            value={examForm.examType}
-                            onChange={e => setExamForm({ ...examForm, examType: e.target.value })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            disabled={editingExam}
-                          >
-                            <option value="MIDTERM">Midterm</option>
-                            <option value="FINAL">Final</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.weightPercent')}</label>
-                          <input
-                            type="number"
-                            min="1"
-                            max="100"
-                            value={examForm.weight}
-                            onChange={e => setExamForm({ ...examForm, weight: parseInt(e.target.value) })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            disabled={editingExam}
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examDate')}</label>
-                          <input
-                            type="date"
-                            value={examForm.examDate}
-                            onChange={e => setExamForm({ ...examForm, examDate: e.target.value })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            required
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examTime')}</label>
-                          <input
-                            type="time"
-                            value={examForm.examTime}
-                            onChange={e => setExamForm({ ...examForm, examTime: e.target.value })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            required
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.durationMin')}</label>
-                          <input
-                            type="number"
-                            min="1"
-                            value={examForm.duration}
-                            onChange={e => setExamForm({ ...examForm, duration: parseInt(e.target.value) })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.location')}</label>
-                          <input
-                            type="text"
-                            value={examForm.location}
-                            onChange={e => setExamForm({ ...examForm, location: e.target.value })}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            placeholder="e.g., Room 101"
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examInstructions')}</label>
-                        <textarea
-                          value={examForm.instructions}
-                          onChange={e => setExamForm({ ...examForm, instructions: e.target.value })}
-                          className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          rows={3}
-                          placeholder="Exam instructions for students..."
-                        />
-                      </div>
 
-                      {/* Early Exam Proposal Option */}
-                      {!editingExam && (
+                    {/* Exam Schedules for this section */}
+                    <div className="bg-blue-50 border border-blue-200 rounded p-4 mb-4">
+                      <p className="font-semibold text-blue-800 mb-2">{t('grade.scheduledExams')}</p>
+                      {examSchedules.length > 0 ? (
+                        <div className="space-y-2">
+                          {examSchedules.map(exam => (
+                            <div key={exam.id} className="flex items-center gap-3">
+                              <span className={`text-xs px-2 py-0.5 rounded ${exam.examType === 'MIDTERM' ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
+                                {exam.examType}
+                              </span>
+                              <span className="text-blue-700 text-sm">
+                                {exam.officialDate || exam.confirmedDate ? new Date(exam.confirmedDate || exam.officialDate).toLocaleString() : t('grade.notSet')}
+                              </span>
+                              {exam.duration && (
+                                <span className="text-xs text-blue-600">{exam.duration} min</span>
+                              )}
+                              {exam.isOnline ? (
+                                <span className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700">{t('grade.online')}</span>
+                              ) : exam.location ? (
+                                <span className="text-xs text-blue-600">📍 {exam.location}</span>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-blue-600">{t('grade.noExamSchedulesYet')}</p>
+                      )}
+                    </div>
+
+                    {/* Create Exam Schedule */}
+                    {!editingExam && (
+                      <form onSubmit={handleCreateExam} className="space-y-4">
+                        {/* Select which grade component (Midterm/Final) to schedule */}
+                        {(() => {
+                          const examComps = (Array.isArray(gradeConfig) ? gradeConfig : [])
+                            .filter(c => c.name === 'Midterm' || c.name === 'Final');
+                          const selectedComp = examComps.find(c =>
+                            (c.name === 'Midterm' && examForm.examType === 'MIDTERM') ||
+                            (c.name === 'Final' && examForm.examType === 'FINAL')
+                          );
+                          return (
+                            <>
+                              <div>
+                                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.selectExamComponent')}</label>
+                                <select
+                                  value={examForm.examType}
+                                  onChange={e => {
+                                    const type = e.target.value;
+                                    const comp = examComps.find(c =>
+                                      (c.name === 'Midterm' && type === 'MIDTERM') ||
+                                      (c.name === 'Final' && type === 'FINAL')
+                                    );
+                                    setExamForm({ ...examForm, examType: type, weight: comp?.weight || 30 });
+                                  }}
+                                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                >
+                                  {examComps.length > 0 ? (
+                                    examComps.map(c => (
+                                      <option key={c.id} value={c.name === 'Midterm' ? 'MIDTERM' : 'FINAL'}>
+                                        {c.name} ({c.weight}%)
+                                      </option>
+                                    ))
+                                  ) : (
+                                    <>
+                                      <option value="MIDTERM">Midterm</option>
+                                      <option value="FINAL">Final</option>
+                                    </>
+                                  )}
+                                </select>
+                                {selectedComp && (
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    {t('grade.autoWeightFromComponent')}: {selectedComp.weight}%
+                                  </p>
+                                )}
+                              </div>
+                            </>
+                          );
+                        })()}
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examDate')}</label>
+                            <input
+                              type="date"
+                              value={examForm.examDate}
+                              onChange={e => setExamForm({ ...examForm, examDate: e.target.value })}
+                              min={examForm.examType === 'MIDTERM'
+                                ? selectedSection?.semester?.midtermExamStart?.slice(0, 10)
+                                : selectedSection?.semester?.finalExamStart?.slice(0, 10)}
+                              max={examForm.examType === 'MIDTERM'
+                                ? selectedSection?.semester?.midtermExamEnd?.slice(0, 10)
+                                : selectedSection?.semester?.finalExamEnd?.slice(0, 10)}
+                              className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                              required
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examTime')}</label>
+                            <input
+                              type="time"
+                              value={examForm.examTime}
+                              onChange={e => setExamForm({ ...examForm, examTime: e.target.value })}
+                              className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                              required
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.durationMin')}</label>
+                            <input
+                              type="number"
+                              min="1"
+                              value={examForm.duration}
+                              onChange={e => setExamForm({ ...examForm, duration: parseInt(e.target.value) })}
+                              className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.location')}</label>
+                            <div className="flex items-center gap-3">
+                              <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+                                <input
+                                  type="checkbox"
+                                  checked={examForm.isOnline}
+                                  onChange={e => setExamForm({ ...examForm, isOnline: e.target.checked, location: e.target.checked ? '' : examForm.location })}
+                                  className="w-4 h-4 rounded border-gray-300"
+                                />
+                                {t('grade.online')}
+                              </label>
+                              {!examForm.isOnline && (
+                                <input
+                                  type="text"
+                                  value={examForm.location}
+                                  onChange={e => setExamForm({ ...examForm, location: e.target.value })}
+                                  className="flex-1 border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                                  placeholder="e.g., Room 101"
+                                />
+                              )}
+                              {examForm.isOnline && (
+                                <span className="text-sm text-blue-600 dark:text-blue-400 font-medium">{t('grade.onlineExam')}</span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('grade.examInstructions')}</label>
+                          <textarea
+                            value={examForm.instructions}
+                            onChange={e => setExamForm({ ...examForm, instructions: e.target.value })}
+                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            rows={2}
+                            placeholder="Exam instructions for students..."
+                          />
+                        </div>
+
+                        {/* Early Exam Proposal */}
                         <div className="border-t pt-4 mt-4">
                           <label className="flex items-center gap-2 cursor-pointer">
                             <input
@@ -1081,34 +1429,18 @@ export default function TeacherGradesPage() {
                             </div>
                           )}
                         </div>
-                      )}
-                      <div className="flex gap-2">
-                        <button
-                          type="submit"
-                          disabled={saving}
-                          className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400"
-                        >
-                          {editingExam ? t('common.edit') : t('common.add')}
-                        </button>
-                        {editingExam && (
+
+                        <div className="flex gap-2">
                           <button
-                            type="button"
-                            onClick={() => {
-                              setEditingExam(null);
-                              setExamForm({
-                                examType: 'MIDTERM',
-                                duration: 60,
-                                location: '',
-                                instructions: '',
-                              });
-                            }}
-                            className="px-4 py-2 border rounded"
+                            type="submit"
+                            disabled={saving}
+                            className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400"
                           >
-                            {t('common.cancel')}
+                            {t('common.add')}
                           </button>
-                        )}
-                      </div>
-                    </form>
+                        </div>
+                      </form>
+                    )}
                   </div>
 
                   {/* Exam List */}
@@ -1126,11 +1458,11 @@ export default function TeacherGradesPage() {
                                 {exam.examType}
                               </span>
 
-                              {/* Show official date */}
+                              {/* Show official date from admin */}
                               <div className="mt-2">
                                 <p className="text-sm text-gray-500">{t('grade.officialDate')}:</p>
                                 <p className="font-medium">
-                                  {exam.officialDate ? new Date(exam.officialDate).toLocaleDateString() : t('grade.notSet')}
+                                  {exam.officialDate ? new Date(exam.officialDate).toLocaleString() : t('grade.notSet')}
                                 </p>
                               </div>
 
@@ -1145,7 +1477,7 @@ export default function TeacherGradesPage() {
                               )}
 
                               <p className="text-sm text-gray-500 mt-2">
-                                Duration: {exam.duration} min | {exam.location || t('grade.locationTBD')}
+                                Duration: {exam.duration} min | {exam.isOnline ? <span className="text-purple-600 font-medium">{t('grade.online')}</span> : (exam.location || t('grade.locationTBD'))}
                               </p>
 
                               {/* Early exam status */}

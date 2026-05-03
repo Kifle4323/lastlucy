@@ -261,6 +261,12 @@ export function registerDepartmentRoutes(router: Router) {
             totalCreditHours,
           },
         });
+
+        // Mark all active enrollments as COMPLETED since student is now certified
+        await prisma.studentEnrollment.updateMany({
+          where: { studentId: user.id, status: 'ENROLLED' },
+          data: { status: 'COMPLETED' },
+        });
       }
 
       res.json({
@@ -366,6 +372,12 @@ export function registerDepartmentRoutes(router: Router) {
           student: { select: { id: true, fullName: true, email: true } },
           department: true,
         },
+      });
+
+      // Mark all active enrollments as COMPLETED since student is now certified
+      await prisma.studentEnrollment.updateMany({
+        where: { studentId: body.studentId, status: 'ENROLLED' },
+        data: { status: 'COMPLETED' },
       });
 
       res.status(201).json(certificate);

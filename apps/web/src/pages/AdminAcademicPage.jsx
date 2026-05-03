@@ -3,6 +3,7 @@ import {
   getAcademicYears, createAcademicYear, updateAcademicYear, deleteAcademicYear,
   getSemesters, createSemester, updateSemester, deleteSemester, publishSemesterGrades,
   getCourses, getUsers, getCourseSections, createCourseSection, updateCourseSection, deleteCourseSection,
+  createScheduleSlot, deleteScheduleSlot,
   getClasses
 } from '../api.js';
 import Layout from '../components/Layout';
@@ -28,16 +29,17 @@ export default function AdminAcademicPage() {
   // Form states
   const [yearForm, setYearForm] = useState({ name: '', startDate: '', endDate: '' });
   const [semesterForm, setSemesterForm] = useState({
-    academicYearId: '', type: 'FALL', name: '', startDate: '', endDate: '',
+    academicYearId: '', type: 'FALL', semesterNumber: '1', name: 'Semester 1', startDate: '', endDate: '',
     registrationStart: '', registrationEnd: '', addDropStart: '', addDropEnd: '',
-    midtermExamDate: '', finalExamDate: '', gradingDeadline: '', registrationFee: ''
+    midtermExamStart: '', midtermExamEnd: '', finalExamStart: '', finalExamEnd: '', gradingDeadline: ''
   });
   const [courseSectionRows, setCourseSectionRows] = useState([
-    { courseId: '', teacherId: '', classId: '', sectionCode: '' }
+    { courseId: '', teacherId: '', classId: '', sectionCode: '', deliveryMode: 'ONLINE', scheduleSlots: [{ dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: '', isOnline: false }] }
   ]);
   const [editingYear, setEditingYear] = useState(null);
   const [editingSemester, setEditingSemester] = useState(null);
   const [editingCourseSection, setEditingCourseSection] = useState(null);
+  const [editingScheduleSlots, setEditingScheduleSlots] = useState([]);
 
   useEffect(() => {
     loadData();
@@ -67,10 +69,14 @@ export default function AdminAcademicPage() {
   // Academic Year handlers
   async function handleCreateYear(e) {
     e.preventDefault();
+    const today = new Date().toISOString().split('T')[0];
+    if (yearForm.startDate < today) { setError('Start date cannot be in the past'); return; }
+    if (yearForm.endDate && yearForm.startDate && yearForm.endDate <= yearForm.startDate) { setError('End date must be after start date'); return; }
     try {
       const newYear = await createAcademicYear(yearForm);
       setAcademicYears([...academicYears, newYear]);
       setYearForm({ name: '', startDate: '', endDate: '' });
+      setError('');
     } catch (err) {
       setError(err.message);
     }
@@ -78,11 +84,13 @@ export default function AdminAcademicPage() {
 
   async function handleUpdateYear(e) {
     e.preventDefault();
+    if (yearForm.endDate && yearForm.startDate && yearForm.endDate <= yearForm.startDate) { setError('End date must be after start date'); return; }
     try {
       const updated = await updateAcademicYear(editingYear.id, yearForm);
       setAcademicYears(academicYears.map(y => y.id === updated.id ? updated : y));
       setEditingYear(null);
       setYearForm({ name: '', startDate: '', endDate: '' });
+      setError('');
     } catch (err) {
       setError(err.message);
     }
@@ -121,9 +129,9 @@ export default function AdminAcademicPage() {
       const newSem = await createSemester(semesterForm);
       setSemesters([...semesters, newSem]);
       setSemesterForm({
-        academicYearId: '', type: 'FALL', name: '', startDate: '', endDate: '',
+        academicYearId: '', type: 'FALL', semesterNumber: '1', name: 'Semester 1', startDate: '', endDate: '',
         registrationStart: '', registrationEnd: '', addDropStart: '', addDropEnd: '',
-        midtermExamDate: '', finalExamDate: '', gradingDeadline: '', registrationFee: ''
+        midtermExamStart: '', midtermExamEnd: '', finalExamStart: '', finalExamEnd: '', gradingDeadline: '', registrationFee: ''
       });
     } catch (err) {
       setError(err.message);
@@ -137,9 +145,9 @@ export default function AdminAcademicPage() {
       setSemesters(semesters.map(s => s.id === updated.id ? updated : s));
       setEditingSemester(null);
       setSemesterForm({
-        academicYearId: '', type: 'FALL', name: '', startDate: '', endDate: '',
+        academicYearId: '', type: 'FALL', semesterNumber: '1', name: 'Semester 1', startDate: '', endDate: '',
         registrationStart: '', registrationEnd: '', addDropStart: '', addDropEnd: '',
-        midtermExamDate: '', finalExamDate: '', gradingDeadline: '', registrationFee: ''
+        midtermExamStart: '', midtermExamEnd: '', finalExamStart: '', finalExamEnd: '', gradingDeadline: '', registrationFee: ''
       });
     } catch (err) {
       setError(err.message);
@@ -197,7 +205,7 @@ export default function AdminAcademicPage() {
     });
     if (!confirmed) return;
     try {
-      await updateSemester(semesterId, { status: newStatus });
+      await updateSemester(semesterId, { status: newStatus, isCurrent: true });
       toast.success(t('admin.semesterStatusUpdated'));
       loadData();
     } catch (err) {
@@ -217,10 +225,11 @@ export default function AdminAcademicPage() {
       registrationEnd: sem.registrationEnd?.split('T')[0] || '',
       addDropStart: sem.addDropStart?.split('T')[0] || '',
       addDropEnd: sem.addDropEnd?.split('T')[0] || '',
-      midtermExamDate: sem.midtermExamDate?.split('T')[0] || '',
-      finalExamDate: sem.finalExamDate?.split('T')[0] || '',
-      gradingDeadline: sem.gradingDeadline?.split('T')[0] || '',
-      registrationFee: sem.registrationFee?.toString() || ''
+      midtermExamStart: sem.midtermExamStart?.split('T')[0] || '',
+      midtermExamEnd: sem.midtermExamEnd?.split('T')[0] || '',
+      finalExamStart: sem.finalExamStart?.split('T')[0] || '',
+      finalExamEnd: sem.finalExamEnd?.split('T')[0] || '',
+      gradingDeadline: sem.gradingDeadline?.split('T')[0] || ''
     });
   }
 
@@ -236,7 +245,7 @@ export default function AdminAcademicPage() {
   }
 
   function addCourseSectionRow() {
-    setCourseSectionRows([...courseSectionRows, { courseId: '', teacherId: '', classId: '', sectionCode: '', deliveryMode: 'ONLINE', schedule: '', room: '' }]);
+    setCourseSectionRows([...courseSectionRows, { courseId: '', teacherId: '', classId: '', sectionCode: '', deliveryMode: 'ONLINE', scheduleSlots: [{ dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: '', isOnline: false }] }]);
   }
 
   function removeCourseSectionRow(index) {
@@ -266,15 +275,33 @@ export default function AdminAcademicPage() {
           classId: row.classId || null,
           sectionCode: row.sectionCode,
           deliveryMode: row.deliveryMode || 'ONLINE',
-          schedule: row.schedule || null,
-          room: row.room || null
+          schedule: null,
+          room: null
         };
         const newSection = await createCourseSection(data);
+        // Create schedule slots for this section
+        if (row.scheduleSlots && row.scheduleSlots.length > 0) {
+          for (const slot of row.scheduleSlots) {
+            if (slot.dayOfWeek && slot.startTime && slot.endTime) {
+              try {
+                await createScheduleSlot(newSection.id, {
+                  dayOfWeek: slot.dayOfWeek,
+                  startTime: slot.startTime,
+                  endTime: slot.endTime,
+                  room: slot.isOnline ? null : (slot.room || null),
+                  isOnline: slot.isOnline,
+                });
+              } catch (slotErr) {
+                console.error('Failed to create schedule slot:', slotErr);
+              }
+            }
+          }
+        }
         createdSections.push(newSection);
       }
 
       setCourseSections([...courseSections, ...createdSections]);
-      setCourseSectionRows([{ courseId: '', teacherId: '', classId: '', sectionCode: '', deliveryMode: 'ONLINE', schedule: '', room: '' }]);
+      setCourseSectionRows([{ courseId: '', teacherId: '', classId: '', sectionCode: '', deliveryMode: 'ONLINE', scheduleSlots: [{ dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: '', isOnline: false }] }]);
     } catch (err) {
       setError(err.message);
     }
@@ -291,8 +318,30 @@ export default function AdminAcademicPage() {
         schedule: editingCourseSection.schedule,
         room: editingCourseSection.room
       });
-      setCourseSections(courseSections.map(s => s.id === updated.id ? updated : s));
+      // Create new schedule slots (those marked as isNew)
+      const newSlots = editingScheduleSlots.filter(s => s.isNew);
+      for (const slot of newSlots) {
+        if (slot.dayOfWeek && slot.startTime && slot.endTime) {
+          try {
+            await createScheduleSlot(editingCourseSection.id, {
+              dayOfWeek: slot.dayOfWeek,
+              startTime: slot.startTime,
+              endTime: slot.endTime,
+              room: slot.isOnline ? null : (slot.room || null),
+              isOnline: slot.isOnline,
+            });
+          } catch (slotErr) {
+            console.error('Failed to create schedule slot:', slotErr);
+          }
+        }
+      }
+      // Reload sections to get updated slots
+      if (selectedSemester) {
+        const data = await getCourseSections(selectedSemester);
+        setCourseSections(data);
+      }
       setEditingCourseSection(null);
+      toast.success(t('admin.courseSectionUpdated', 'Course section updated'));
     } catch (err) {
       setError(err.message);
     }
@@ -318,6 +367,11 @@ export default function AdminAcademicPage() {
 
   function startEditCourseSection(section) {
     setEditingCourseSection(section);
+    setEditingScheduleSlots(
+      section.scheduleSlots && section.scheduleSlots.length > 0
+        ? section.scheduleSlots.map(s => ({ ...s, isNew: false }))
+        : [{ dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: section.room || '', isOnline: section.deliveryMode === 'ONLINE', isNew: true }]
+    );
     setCourseSectionForm({
       courseId: section.courseId,
       semesterId: section.semesterId,
@@ -383,6 +437,7 @@ export default function AdminAcademicPage() {
                   type="date"
                   value={yearForm.startDate}
                   onChange={e => setYearForm({ ...yearForm, startDate: e.target.value })}
+                  min={new Date().toISOString().split('T')[0]}
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   required
                 />
@@ -393,9 +448,11 @@ export default function AdminAcademicPage() {
                   type="date"
                   value={yearForm.endDate}
                   onChange={e => setYearForm({ ...yearForm, endDate: e.target.value })}
+                  min={yearForm.startDate || new Date().toISOString().split('T')[0]}
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500"
                   required
                 />
+                {yearForm.startDate && yearForm.endDate && yearForm.endDate <= yearForm.startDate && <p className="text-red-500 text-xs mt-1">End date must be after start date</p>}
               </div>
               <div className="flex gap-2">
                 <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
@@ -473,14 +530,20 @@ export default function AdminAcademicPage() {
                 </div>
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.nameExampleSemester')}</label>
-                <input
-                  type="text"
-                  value={semesterForm.name}
-                  onChange={e => setSemesterForm({ ...semesterForm, name: e.target.value })}
+                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Semester</label>
+                <select
+                  value={semesterForm.semesterNumber}
+                  onChange={e => {
+                    const semesterNumber = e.target.value;
+                    const name = `Semester ${semesterNumber}`;
+                    setSemesterForm({ ...semesterForm, semesterNumber, name });
+                  }}
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                   required
-                />
+                >
+                  <option value="1">Semester 1</option>
+                  <option value="2">Semester 2</option>
+                </select>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -552,22 +615,42 @@ export default function AdminAcademicPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.midtermExamDate')}</label>
-                  <input
-                    type="date"
-                    value={semesterForm.midtermExamDate}
-                    onChange={e => setSemesterForm({ ...semesterForm, midtermExamDate: e.target.value })}
-                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
+                  <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.midtermExamPeriod')}</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={semesterForm.midtermExamStart}
+                      onChange={e => setSemesterForm({ ...semesterForm, midtermExamStart: e.target.value })}
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      placeholder="Start"
+                    />
+                    <input
+                      type="date"
+                      value={semesterForm.midtermExamEnd}
+                      onChange={e => setSemesterForm({ ...semesterForm, midtermExamEnd: e.target.value })}
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      placeholder="End"
+                    />
+                  </div>
                 </div>
                 <div>
-                  <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.finalExamDate')}</label>
-                  <input
-                    type="date"
-                    value={semesterForm.finalExamDate}
-                    onChange={e => setSemesterForm({ ...semesterForm, finalExamDate: e.target.value })}
-                    className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  />
+                  <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.finalExamPeriod')}</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={semesterForm.finalExamStart}
+                      onChange={e => setSemesterForm({ ...semesterForm, finalExamStart: e.target.value })}
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      placeholder="Start"
+                    />
+                    <input
+                      type="date"
+                      value={semesterForm.finalExamEnd}
+                      onChange={e => setSemesterForm({ ...semesterForm, finalExamEnd: e.target.value })}
+                      className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                      placeholder="End"
+                    />
+                  </div>
                 </div>
               </div>
               <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-3 text-sm">
@@ -585,25 +668,15 @@ export default function AdminAcademicPage() {
                   className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.registrationFeeETB')}</label>
-                <input
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  placeholder={t('admin.leaveEmptyForNoFee')}
-                  value={semesterForm.registrationFee}
-                  onChange={e => setSemesterForm({ ...semesterForm, registrationFee: e.target.value })}
-                  className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                />
-                <p className="text-xs text-gray-500 mt-1">{t('admin.chapaPaymentDesc')}</p>
+              <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/30 rounded text-xs text-blue-700 dark:text-blue-300">
+                {t('admin.feeAutoCalculated')}
               </div>
               <div className="flex gap-2">
                 <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
                   {editingSemester ? t('common.update') : t('common.create')}
                 </button>
                 {editingSemester && (
-                  <button type="button" onClick={() => { setEditingSemester(null); setSemesterForm({ academicYearId: '', type: 'FALL', name: '', startDate: '', endDate: '', registrationStart: '', registrationEnd: '', addDropStart: '', addDropEnd: '', midtermExamDate: '', finalExamDate: '', gradingDeadline: '', registrationFee: '' }); }} className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
+                  <button type="button" onClick={() => { setEditingSemester(null); setSemesterForm({ academicYearId: '', type: 'FALL', name: '', startDate: '', endDate: '', registrationStart: '', registrationEnd: '', addDropStart: '', addDropEnd: '', midtermExamStart: '', midtermExamEnd: '', finalExamStart: '', finalExamEnd: '', gradingDeadline: '' }); }} className="px-4 py-2 border border-gray-300 dark:border-gray-600 rounded text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700">
                     {t('common.cancel')}
                   </button>
                 )}
@@ -643,17 +716,21 @@ export default function AdminAcademicPage() {
                         <div className="bg-yellow-50 dark:bg-yellow-900/30 rounded p-2">
                           <div className="text-xs text-yellow-600 dark:text-yellow-400 font-medium">{t('admin.midtermExam')}</div>
                           <div className="text-gray-700 dark:text-gray-300">
-                            {sem.midtermExamDate
-                              ? new Date(sem.midtermExamDate).toLocaleDateString()
-                              : t('admin.notSet')}
+                            {sem.midtermExamStart
+                              ? `${new Date(sem.midtermExamStart).toLocaleDateString()} - ${new Date(sem.midtermExamEnd).toLocaleDateString()}`
+                              : sem.midtermExamDate
+                                ? new Date(sem.midtermExamDate).toLocaleDateString()
+                                : t('admin.notSet')}
                           </div>
                         </div>
                         <div className="bg-red-50 dark:bg-red-900/30 rounded p-2">
                           <div className="text-xs text-red-600 dark:text-red-400 font-medium">{t('admin.finalExam')}</div>
                           <div className="text-gray-700 dark:text-gray-300">
-                            {sem.finalExamDate
-                              ? new Date(sem.finalExamDate).toLocaleDateString()
-                              : t('admin.notSet')}
+                            {sem.finalExamStart
+                              ? `${new Date(sem.finalExamStart).toLocaleDateString()} - ${new Date(sem.finalExamEnd).toLocaleDateString()}`
+                              : sem.finalExamDate
+                                ? new Date(sem.finalExamDate).toLocaleDateString()
+                                : t('admin.notSet')}
                           </div>
                         </div>
                       </div>
@@ -861,28 +938,100 @@ export default function AdminAcademicPage() {
                           >
                             <option value="ONLINE">{t('admin.online')}</option>
                             <option value="PAPER">{t('admin.faceToFace')}</option>
+                            <option value="MIXED">Mixed</option>
                           </select>
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.schedule')}</label>
-                          <input
-                            type="text"
-                            value={row.schedule || ''}
-                            onChange={e => updateCourseSectionRow(index, 'schedule', e.target.value)}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            placeholder={t('admin.schedulePlaceholder')}
-                          />
+                      </div>
+                      {/* Schedule Slots */}
+                      <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-600">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-xs font-medium text-gray-600 dark:text-gray-400">{t('admin.weeklySchedule', 'Weekly Schedule')}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const updated = [...courseSectionRows];
+                              updated[index].scheduleSlots = [...(updated[index].scheduleSlots || []), { dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: '', isOnline: false }];
+                              setCourseSectionRows(updated);
+                            }}
+                            className="text-xs text-blue-600 hover:text-blue-800"
+                          >
+                            + {t('admin.addScheduleSlot', 'Add Slot')}
+                          </button>
                         </div>
-                        <div>
-                          <label className="block text-xs font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.room')}</label>
-                          <input
-                            type="text"
-                            value={row.room || ''}
-                            onChange={e => updateCourseSectionRow(index, 'room', e.target.value)}
-                            className="w-full border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                            placeholder={t('admin.roomPlaceholder')}
-                          />
-                        </div>
+                        {(row.scheduleSlots || []).map((slot, slotIdx) => (
+                          <div key={slotIdx} className="grid grid-cols-6 gap-2 mb-2 items-center">
+                            <select
+                              value={slot.dayOfWeek}
+                              onChange={e => {
+                                const updated = [...courseSectionRows];
+                                updated[index].scheduleSlots[slotIdx].dayOfWeek = e.target.value;
+                                setCourseSectionRows(updated);
+                              }}
+                              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            >
+                              {['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].map(d => (
+                                <option key={d} value={d}>{d.slice(0,3)}</option>
+                              ))}
+                            </select>
+                            <input
+                              type="time"
+                              value={slot.startTime}
+                              onChange={e => {
+                                const updated = [...courseSectionRows];
+                                updated[index].scheduleSlots[slotIdx].startTime = e.target.value;
+                                setCourseSectionRows(updated);
+                              }}
+                              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            />
+                            <input
+                              type="time"
+                              value={slot.endTime}
+                              onChange={e => {
+                                const updated = [...courseSectionRows];
+                                updated[index].scheduleSlots[slotIdx].endTime = e.target.value;
+                                setCourseSectionRows(updated);
+                              }}
+                              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                            />
+                            <input
+                              type="text"
+                              value={slot.room}
+                              onChange={e => {
+                                const updated = [...courseSectionRows];
+                                updated[index].scheduleSlots[slotIdx].room = e.target.value;
+                                setCourseSectionRows(updated);
+                              }}
+                              placeholder={t('admin.roomPlaceholder')}
+                              disabled={slot.isOnline}
+                              className="border border-gray-300 dark:border-gray-600 rounded px-1 py-1 text-xs bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                            />
+                            <label className="flex items-center gap-1 text-xs text-gray-600 dark:text-gray-400">
+                              <input
+                                type="checkbox"
+                                checked={slot.isOnline}
+                                onChange={e => {
+                                  const updated = [...courseSectionRows];
+                                  updated[index].scheduleSlots[slotIdx].isOnline = e.target.checked;
+                                  if (e.target.checked) updated[index].scheduleSlots[slotIdx].room = '';
+                                  setCourseSectionRows(updated);
+                                }}
+                                className="w-3 h-3"
+                              />
+                              {t('admin.online', 'Online')}
+                            </label>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const updated = [...courseSectionRows];
+                                updated[index].scheduleSlots = updated[index].scheduleSlots.filter((_, i) => i !== slotIdx);
+                                setCourseSectionRows(updated);
+                              }}
+                              className="text-red-500 hover:text-red-700 text-xs"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ))}
@@ -963,28 +1112,103 @@ export default function AdminAcademicPage() {
                         >
                           <option value="ONLINE">{t('admin.online')}</option>
                           <option value="PAPER">{t('admin.faceToFace')}</option>
+                          <option value="MIXED">Mixed</option>
                         </select>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.schedule')}</label>
-                        <input
-                          type="text"
-                          value={editingCourseSection.schedule || ''}
-                          onChange={e => setEditingCourseSection({ ...editingCourseSection, schedule: e.target.value })}
-                          className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          placeholder={t('admin.schedulePlaceholder')}
-                        />
+                    </div>
+                    {/* Schedule Slots in Edit Form */}
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-600">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">{t('admin.weeklySchedule', 'Weekly Schedule')}</span>
+                        <button
+                          type="button"
+                          onClick={() => setEditingScheduleSlots([...editingScheduleSlots, { dayOfWeek: 'MONDAY', startTime: '08:30', endTime: '10:30', room: '', isOnline: false, isNew: true }])}
+                          className="text-xs bg-blue-600 text-white px-2 py-1 rounded hover:bg-blue-700"
+                        >
+                          + {t('admin.addScheduleSlot', 'Add Slot')}
+                        </button>
                       </div>
-                      <div>
-                        <label className="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{t('admin.room')}</label>
-                        <input
-                          type="text"
-                          value={editingCourseSection.room || ''}
-                          onChange={e => setEditingCourseSection({ ...editingCourseSection, room: e.target.value })}
-                          className="w-full border border-gray-300 dark:border-gray-600 rounded px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                          placeholder={t('admin.roomPlaceholder')}
-                        />
-                      </div>
+                      {editingScheduleSlots.map((slot, slotIdx) => (
+                        <div key={slot.id || slotIdx} className="grid grid-cols-6 gap-2 mb-2 items-center">
+                          <select
+                            value={slot.dayOfWeek}
+                            onChange={e => {
+                              const updated = [...editingScheduleSlots];
+                              updated[slotIdx] = { ...updated[slotIdx], dayOfWeek: e.target.value };
+                              setEditingScheduleSlots(updated);
+                            }}
+                            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                          >
+                            {['MONDAY','TUESDAY','WEDNESDAY','THURSDAY','FRIDAY','SATURDAY','SUNDAY'].map(d => (
+                              <option key={d} value={d}>{d.slice(0,3)}</option>
+                            ))}
+                          </select>
+                          <input
+                            type="time"
+                            value={slot.startTime}
+                            onChange={e => {
+                              const updated = [...editingScheduleSlots];
+                              updated[slotIdx] = { ...updated[slotIdx], startTime: e.target.value };
+                              setEditingScheduleSlots(updated);
+                            }}
+                            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                          />
+                          <input
+                            type="time"
+                            value={slot.endTime}
+                            onChange={e => {
+                              const updated = [...editingScheduleSlots];
+                              updated[slotIdx] = { ...updated[slotIdx], endTime: e.target.value };
+                              setEditingScheduleSlots(updated);
+                            }}
+                            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                          />
+                          <input
+                            type="text"
+                            value={slot.room || ''}
+                            onChange={e => {
+                              const updated = [...editingScheduleSlots];
+                              updated[slotIdx] = { ...updated[slotIdx], room: e.target.value };
+                              setEditingScheduleSlots(updated);
+                            }}
+                            placeholder={t('admin.roomPlaceholder')}
+                            disabled={slot.isOnline}
+                            className="border border-gray-300 dark:border-gray-600 rounded px-2 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:opacity-50"
+                          />
+                          <label className="flex items-center gap-1 text-sm text-gray-600 dark:text-gray-400">
+                            <input
+                              type="checkbox"
+                              checked={slot.isOnline}
+                              onChange={e => {
+                                const updated = [...editingScheduleSlots];
+                                updated[slotIdx] = { ...updated[slotIdx], isOnline: e.target.checked, room: e.target.checked ? '' : updated[slotIdx].room };
+                                setEditingScheduleSlots(updated);
+                              }}
+                              className="w-4 h-4"
+                            />
+                            {t('admin.online', 'Online')}
+                          </label>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (slot.id && !slot.isNew) {
+                                try {
+                                  await deleteScheduleSlot(slot.id);
+                                  setEditingScheduleSlots(editingScheduleSlots.filter((_, i) => i !== slotIdx));
+                                  toast.success(t('admin.scheduleSlotDeleted', 'Schedule slot deleted'));
+                                } catch (err) {
+                                  toast.error(err.message);
+                                }
+                              } else {
+                                setEditingScheduleSlots(editingScheduleSlots.filter((_, i) => i !== slotIdx));
+                              }
+                            }}
+                            className="text-red-500 hover:text-red-700 text-sm"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
                     </div>
                     <div className="flex gap-2">
                       <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
@@ -1072,8 +1296,24 @@ export default function AdminAcademicPage() {
                                   <span className="text-gray-900 dark:text-white">{section.teacher?.fullName || t('admin.notAssigned')}</span>
                                 </td>
                                 <td className="px-4 py-3">
-                                  <span className="text-sm text-gray-500 dark:text-gray-400">{section.schedule || '-'}</span>
-                                  {section.room && (
+                                  {section.scheduleSlots && section.scheduleSlots.length > 0 ? (
+                                    <div className="space-y-1">
+                                      {section.scheduleSlots.map(slot => (
+                                        <div key={slot.id} className="text-xs">
+                                          <span className="font-medium">{slot.dayOfWeek?.slice(0,3)}</span>{' '}
+                                          {slot.startTime}-{slot.endTime}
+                                          {slot.isOnline ? (
+                                            <span className="text-blue-500 ml-1">Online</span>
+                                          ) : (
+                                            <span className="text-gray-400 ml-1">{slot.room || ''}</span>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  ) : (
+                                    <span className="text-sm text-gray-500 dark:text-gray-400">{section.schedule || '-'}</span>
+                                  )}
+                                  {section.room && (!section.scheduleSlots || section.scheduleSlots.length === 0) && (
                                     <span className="block text-xs text-gray-400">{section.room}</span>
                                   )}
                                 </td>

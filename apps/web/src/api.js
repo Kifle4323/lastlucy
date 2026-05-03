@@ -1,883 +1,397 @@
-// API base URL - uses Render backend in production, localhost:4000 in dev
-export const API_BASE = window.location.hostname === 'localhost'
-  ? 'http://localhost:4000/api'
+// API base URL - uses local API when on localhost or local network, Render in production
+const isLocal = window.location.hostname === 'localhost'
+  || window.location.hostname === '127.0.0.1'
+  || window.location.hostname.startsWith('192.168.')
+  || window.location.hostname.startsWith('10.')
+  || window.location.hostname.startsWith('172.16.');
+const API_BASE = isLocal
+  ? `http://${window.location.hostname}:4000/api`
   : 'https://lucy-lms-back.onrender.com/api';
 
-function getToken() {
-  return localStorage.getItem('accessToken');
-}
-
-export async function apiFetch(path, options) {
-  const token = getToken();
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options?.headers,
-    },
-  });
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    const err = new Error(body.error || body.message || `HTTP ${res.status}`);
-    // Pass through additional error properties
-    if (body.missingFields) err.missingFields = body.missingFields;
-    if (body.details) err.details = body.details;
-    throw err;
+class ApiClient {
+  constructor(baseURL) {
+    this.baseURL = baseURL;
+    this._refreshing = null;
+    this._onError = null;
   }
 
-  return res.json();
+  onError(callback) {
+    this._onError = callback;
+    return () => { this._onError = null; };
+  }
+
+  getToken() {
+    return localStorage.getItem('accessToken');
+  }
+
+  async refreshTokens() {
+    if (this._refreshing) return this._refreshing;
+    this._refreshing = (async () => {
+      try {
+        const refreshToken = localStorage.getItem('refreshToken');
+        if (!refreshToken) throw new Error('No refresh token');
+        const res = await fetch(`${this.baseURL}/auth/refresh`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (!res.ok) throw new Error('Refresh failed');
+        const data = await res.json();
+        localStorage.setItem('accessToken', data.accessToken);
+        localStorage.setItem('refreshToken', data.refreshToken);
+        return data.accessToken;
+      } catch {
+        localStorage.removeItem('accessToken');
+        localStorage.removeItem('refreshToken');
+        window.location.href = '/login';
+        throw new Error('Session expired');
+      } finally {
+        this._refreshing = null;
+      }
+    })();
+    return this._refreshing;
+  }
+
+  async fetch(path, options = {}) {
+    const token = this.getToken();
+    const res = await fetch(`${this.baseURL}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    });
+
+    if (res.status === 401 && token) {
+      const newToken = await this.refreshTokens();
+      const retry = await fetch(`${this.baseURL}${path}`, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${newToken}`,
+          ...options.headers,
+        },
+      });
+      if (!retry.ok) {
+        const body = await retry.json().catch(() => ({}));
+        throw new Error(body.error || body.message || `HTTP ${retry.status}`);
+      }
+      return retry.json();
+    }
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      let message = body.error || body.message || `HTTP ${res.status}`;
+      // Format Zod validation details into readable message
+      if (Array.isArray(body.details) && body.details.length > 0) {
+        const fieldMessages = body.details.map(d => {
+          const field = d.path?.join('.') || '';
+          return field ? `${field}: ${d.message}` : d.message;
+        });
+        message = fieldMessages.join('\n');
+      }
+      const err = new Error(message);
+      if (body.missingFields) err.missingFields = body.missingFields;
+      if (body.details) err.details = body.details;
+      // Flatten details.missingFields for convenience
+      if (body.details?.missingFields) err.missingFields = body.details.missingFields;
+      if (this._onError) this._onError(err);
+      throw err;
+    }
+
+    return res.json();
+  }
+
+  get(path) { return this.fetch(path); }
+  post(path, data) { return this.fetch(path, { method: 'POST', body: JSON.stringify(data) }); }
+  put(path, data) { return this.fetch(path, { method: 'PUT', body: JSON.stringify(data) }); }
+  patch(path, data) { return this.fetch(path, { method: 'PATCH', body: JSON.stringify(data) }); }
+  del(path) { return this.fetch(path, { method: 'DELETE' }); }
 }
 
-// Auth
-export async function register(data) {
-  return apiFetch('/auth/register', { method: 'POST', body: JSON.stringify(data) });
-}
+const api = new ApiClient(API_BASE);
+export { api, API_BASE };
+export default api;
 
+// ==================== AUTH ====================
+export async function register(data) { return api.post('/auth/register', data); }
 export async function login(data) {
-  const result = await apiFetch('/auth/login', { method: 'POST', body: JSON.stringify(data) });
+  const result = await api.post('/auth/login', data);
   localStorage.setItem('accessToken', result.accessToken);
   localStorage.setItem('refreshToken', result.refreshToken);
   return result;
 }
-
-export async function getMe() {
-  return apiFetch('/me');
-}
-
-// Update profile (name and picture)
-export async function updateMyProfile(data) {
-  return apiFetch('/users/me/profile', { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-// Change password
-export async function changePassword(currentPassword, newPassword) {
-  return apiFetch('/me/change-password', { 
-    method: 'POST', 
-    body: JSON.stringify({ currentPassword, newPassword }) 
-  });
-}
-
-// Admin: create user
-export async function adminCreateUser(data) {
-  return apiFetch('/admin/users', { method: 'POST', body: JSON.stringify(data) });
-}
-
-// Admin: get pending users
-export async function getPendingUsers() {
-  return apiFetch('/admin/pending-users');
-}
-
-// Admin: approve user
-export async function approveUser(userId) {
-  return apiFetch(`/admin/users/${userId}/approve`, { method: 'POST' });
-}
-
-// Admin: reject/delete user
-export async function deleteUser(userId) {
-  return apiFetch(`/admin/users/${userId}`, { method: 'DELETE' });
-}
-
-// Classes
-export async function getClasses() {
-  return apiFetch('/classes');
-}
-
-export async function getClass(classId) {
-  return apiFetch(`/classes/${classId}`);
-}
-
-export async function createClass(data) {
-  return apiFetch('/classes', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateClass(classId, data) {
-  return apiFetch(`/classes/${classId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteClass(classId) {
-  return apiFetch(`/classes/${classId}`, { method: 'DELETE' });
-}
-
-export async function addStudentToClass(classId, studentId) {
-  return apiFetch(`/classes/${classId}/students`, { method: 'POST', body: JSON.stringify({ studentId }) });
-}
-
-export async function removeStudentFromClass(classId, studentId) {
-  return apiFetch(`/classes/${classId}/students/${studentId}`, { method: 'DELETE' });
-}
-
-export async function addTeacherToClass(classId, teacherId) {
-  return apiFetch(`/classes/${classId}/teachers`, { method: 'POST', body: JSON.stringify({ teacherId }) });
-}
-
-export async function removeTeacherFromClass(classId, teacherId) {
-  return apiFetch(`/classes/${classId}/teachers/${teacherId}`, { method: 'DELETE' });
-}
-
-export async function assignCourseToClass(classId, courseId, teacherId) {
-  return apiFetch(`/classes/${classId}/courses`, { method: 'POST', body: JSON.stringify({ courseId, teacherId }) });
-}
-
-export async function removeCourseFromClass(classId, courseId) {
-  return apiFetch(`/classes/${classId}/courses/${courseId}`, { method: 'DELETE' });
-}
-
-// Courses
-export async function getCourses() {
-  return apiFetch('/courses');
-}
-
-export async function createCourse(data) {
-  return apiFetch('/courses', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateCourse(id, data) {
-  return apiFetch(`/courses/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteCourse(id) {
-  return apiFetch(`/courses/${id}`, { method: 'DELETE' });
-}
-
-// Admin: get all users
-export async function getUsers() {
-  return apiFetch('/users');
-}
-
-// Teacher: get students enrolled in a course
-export async function getCourseStudents(courseId) {
-  return apiFetch(`/courses/${courseId}/students`);
-}
-
-// Student: get own attempts for a course
-export async function getStudentAttempts(courseId) {
-  return apiFetch(`/courses/${courseId}/my-attempts`);
-}
-
-// Assessments
-export async function getCourseAssessments(courseId) {
-  return apiFetch(`/courses/${courseId}/assessments`);
-}
-
-export async function createAssessment(courseId, data) {
-  return apiFetch(`/courses/${courseId}/assessments`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function createQuestion(assessmentId, data) {
-  return apiFetch(`/assessments/${assessmentId}/questions`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateQuestion(questionId, data) {
-  return apiFetch(`/questions/${questionId}`, { method: 'PUT', body: JSON.stringify(data) });
-}
-
-export async function deleteQuestion(questionId) {
-  return apiFetch(`/questions/${questionId}`, { method: 'DELETE' });
-}
-
-export async function getAssessmentQuestions(assessmentId) {
-  return apiFetch(`/assessments/${assessmentId}/questions`);
-}
-
-export async function toggleAssessmentOpen(assessmentId, isOpen) {
-  return apiFetch(`/assessments/${assessmentId}/open`, { method: 'PATCH', body: JSON.stringify({ isOpen }) });
-}
-
-export async function updateAssessment(assessmentId, data) {
-  return apiFetch(`/assessments/${assessmentId}`, { method: 'PUT', body: JSON.stringify(data) });
-}
-
-export async function deleteAssessment(assessmentId) {
-  return apiFetch(`/assessments/${assessmentId}`, { method: 'DELETE' });
-}
-
-export async function getManualGrades(assessmentId) {
-  return apiFetch(`/assessments/${assessmentId}/manual-grades`);
-}
-
-export async function setManualGrade(assessmentId, studentId, score, feedback) {
-  return apiFetch(`/assessments/${assessmentId}/manual-grades/${studentId}`, {
-    method: 'PUT',
-    body: JSON.stringify({ score, feedback }),
-  });
-}
-
-export async function deleteManualGrade(assessmentId, studentId) {
-  return apiFetch(`/assessments/${assessmentId}/manual-grades/${studentId}`, { method: 'DELETE' });
-}
-
-// Gradebook
-export async function getGradeComponents(courseId) {
-  return apiFetch(`/courses/${courseId}/grade-components`);
-}
-
-export async function addGradeComponent(courseId, name, weight) {
-  return apiFetch(`/courses/${courseId}/grade-components`, { method: 'POST', body: JSON.stringify({ name, weight }) });
-}
-
-export async function updateGradeComponent(courseId, componentId, data) {
-  return apiFetch(`/courses/${courseId}/grade-components/${componentId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteGradeComponent(courseId, componentId) {
-  return apiFetch(`/courses/${courseId}/grade-components/${componentId}`, { method: 'DELETE' });
-}
-
-export async function getGradeConfig(courseId) {
-  return apiFetch(`/courses/${courseId}/grade-components`);
-}
-
-export async function getAttendance(courseId) {
-  return apiFetch(`/courses/${courseId}/attendance`);
-}
-
-export async function setAttendance(courseId, studentId, score, feedback) {
-  return apiFetch(`/courses/${courseId}/attendance/${studentId}`, {
-    method: 'PUT',
-    body: JSON.stringify({ score, feedback }),
-  });
-}
-
-export async function getGradebook(courseId) {
-  return apiFetch(`/courses/${courseId}/gradebook`);
-}
-
-export async function getMyGrades(courseId) {
-  return apiFetch(`/courses/${courseId}/my-grades`);
-}
-
-// Face Verification
-export async function updateProfile(data) {
-  return apiFetch('/users/me/profile', { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function getProfileStatus() {
-  return apiFetch('/users/me/profile-status');
-}
-
-export async function getStudentsProfiles() {
-  return apiFetch('/admin/students-profiles');
-}
-
-export async function getPendingFaceVerifications() {
-  return apiFetch('/admin/face-verifications/pending');
-}
-
-export async function getFaceVerifications(status) {
-  const query = status ? `?status=${status}` : '';
-  return apiFetch(`/admin/face-verifications${query}`);
-}
-
-export async function reviewFaceVerification(id, approved) {
-  return apiFetch(`/admin/face-verifications/${id}/review`, {
-    method: 'POST',
-    body: JSON.stringify({ approved }),
-  });
-}
-
-export async function getAttemptsForGrading(assessmentId) {
-  return apiFetch(`/assessments/${assessmentId}/attempts-for-grading`);
-}
-
-export async function createFaceVerification(attemptId, capturedImage, matchResult) {
-  return apiFetch('/face-verifications', {
-    method: 'POST',
-    body: JSON.stringify({ attemptId, capturedImage, matchResult }),
-  });
-}
-
-export async function gradeAttempt(attemptId, answers) {
-  return apiFetch(`/attempts/${attemptId}/grade`, { method: 'POST', body: JSON.stringify({ answers }) });
-}
-
-export async function startAttempt(assessmentId) {
-  return apiFetch(`/assessments/${assessmentId}/attempts`, { method: 'POST' });
-}
-
-export async function getAttempt(attemptId) {
-  return apiFetch(`/attempts/${attemptId}`);
-}
-
-export async function saveAnswer(attemptId, questionId, data) {
-  return apiFetch(`/attempts/${attemptId}/answers`, { method: 'PATCH', body: JSON.stringify({ questionId, ...data }) });
-}
-
-export async function submitAttempt(attemptId) {
-  return apiFetch(`/attempts/${attemptId}/submit`, { method: 'POST' });
-}
-
-// Materials
-export async function getCourseMaterials(courseId) {
-  return apiFetch(`/courses/${courseId}/materials`);
-}
-
-export async function createMaterial(courseId, data) {
-  return apiFetch(`/courses/${courseId}/materials`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateMaterial(materialId, data) {
-  return apiFetch(`/materials/${materialId}`, { method: 'PUT', body: JSON.stringify(data) });
-}
-
-export async function deleteMaterial(materialId) {
-  return apiFetch(`/materials/${materialId}`, { method: 'DELETE' });
-}
-
-export async function recordMaterialView(materialId) {
-  return apiFetch(`/materials/${materialId}/view`, { method: 'POST' });
-}
-
-export async function closeMaterialView(viewId) {
-  return apiFetch(`/material-views/${viewId}/close`, { method: 'PATCH' });
-}
-
-// Get PPTX material as HTML with reading time tracking
+export async function getMe() { return api.get('/auth/me'); }
+export async function updateMyProfile(data) { return api.patch('/users/me/profile', data); }
+export async function changePassword(currentPassword, newPassword) { return api.patch('/users/me/password', { currentPassword, newPassword }); }
+export async function adminCreateUser(data) { return api.post('/admin/users', data); }
+export async function adminResetPassword(userId, newPassword) { return api.post(`/admin/users/${userId}/reset-password`, { newPassword }); }
+export async function adminUpdateUser(userId, data) { return api.patch(`/admin/users/${userId}`, data); }
+export async function getPendingUsers() { return api.get('/admin/users/pending'); }
+export async function approveUser(userId) { return api.post(`/admin/users/${userId}/approve`); }
+export async function deleteUser(userId) { return api.del(`/admin/users/${userId}`); }
+
+// ==================== CLASSES ====================
+export async function getClasses() { return api.get('/classes'); }
+export async function getClass(classId) { return api.get(`/classes/${classId}`); }
+export async function createClass(data) { return api.post('/classes', data); }
+export async function updateClass(classId, data) { return api.patch(`/classes/${classId}`, data); }
+export async function deleteClass(classId) { return api.del(`/classes/${classId}`); }
+export async function addStudentToClass(classId, studentId) { return api.post(`/classes/${classId}/students`, { studentId }); }
+export async function removeStudentFromClass(classId, studentId) { return api.del(`/classes/${classId}/students/${studentId}`); }
+export async function addTeacherToClass(classId, teacherId) { return api.post(`/classes/${classId}/teachers`, { teacherId }); }
+export async function removeTeacherFromClass(classId, teacherId) { return api.del(`/classes/${classId}/teachers/${teacherId}`); }
+export async function assignCourseToClass(classId, courseId, teacherId) { return api.post(`/classes/${classId}/courses`, { courseId, teacherId }); }
+export async function removeCourseFromClass(classId, courseId) { return api.del(`/classes/${classId}/courses/${courseId}`); }
+
+// ==================== COURSES ====================
+export async function getCourses() { return api.get('/courses'); }
+export async function createCourse(data) { return api.post('/courses', data); }
+export async function updateCourse(id, data) { return api.patch(`/courses/${id}`, data); }
+export async function deleteCourse(id) { return api.del(`/courses/${id}`); }
+export async function getUsers() { return api.get('/users'); }
+export async function getCourseStudents(courseId, sectionId) { return api.get(`/courses/${courseId}/students${sectionId ? `?sectionId=${sectionId}` : ''}`); }
+export async function getStudentAttempts(courseId) { return api.get(`/courses/${courseId}/my-attempts`); }
+
+// ==================== ASSESSMENTS ====================
+export async function getCourseAssessments(courseId) { return api.get(`/courses/${courseId}/assessments`); }
+export async function createAssessment(courseId, data) { return api.post(`/courses/${courseId}/assessments`, data); }
+export async function createQuestion(assessmentId, data) { return api.post(`/assessments/${assessmentId}/questions`, data); }
+export async function updateQuestion(questionId, data) { return api.put(`/questions/${questionId}`, data); }
+export async function deleteQuestion(questionId) { return api.del(`/questions/${questionId}`); }
+export async function getAssessmentQuestions(assessmentId) { return api.get(`/assessments/${assessmentId}/questions`); }
+export async function toggleAssessmentOpen(assessmentId, isOpen) { return api.patch(`/assessments/${assessmentId}/open`, { isOpen }); }
+export async function updateAssessment(assessmentId, data) { return api.put(`/assessments/${assessmentId}`, data); }
+export async function deleteAssessment(assessmentId) { return api.del(`/assessments/${assessmentId}`); }
+export async function getManualGrades(assessmentId) { return api.get(`/assessments/${assessmentId}/manual-grades`); }
+export async function setManualGrade(assessmentId, studentId, score, feedback) { return api.put(`/assessments/${assessmentId}/manual-grades/${studentId}`, { score, feedback }); }
+export async function deleteManualGrade(assessmentId, studentId) { return api.del(`/assessments/${assessmentId}/manual-grades/${studentId}`); }
+
+// ==================== GRADEBOOK ====================
+export async function getGradeComponents(courseId) { return api.get(`/courses/${courseId}/grade-components`); }
+export async function addGradeComponent(courseId, name, weight) { return api.post(`/courses/${courseId}/grade-components`, { name, weight }); }
+export async function updateGradeComponent(courseId, componentId, data) { return api.patch(`/courses/${courseId}/grade-components/${componentId}`, data); }
+export async function deleteGradeComponent(courseId, componentId) { return api.del(`/courses/${courseId}/grade-components/${componentId}`); }
+export async function getGradeConfig(courseId) { return api.get(`/courses/${courseId}/grade-components`); }
+export async function getAttendance(courseId) { return api.get(`/courses/${courseId}/attendance`); }
+export async function setAttendance(courseId, studentId, score, feedback) { return api.put(`/courses/${courseId}/attendance/${studentId}`, { score, feedback }); }
+export async function getGradebook(courseId) { return api.get(`/courses/${courseId}/gradebook`); }
+export async function getMyGrades(courseId) { return api.get(`/courses/${courseId}/my-grades`); }
+
+// ==================== FACE VERIFICATION ====================
+export async function updateProfile(data) { return api.patch('/users/me/profile', data); }
+export async function getProfileStatus() { return api.get('/users/me/profile-status'); }
+export async function getStudentsProfiles() { return api.get('/admin/students-profiles'); }
+export async function getPendingFaceVerifications() { return api.get('/admin/face-verifications/pending'); }
+export async function getFaceVerifications(status) { return api.get(`/admin/face-verifications${status ? `?status=${status}` : ''}`); }
+export async function reviewFaceVerification(id, approved) { return api.post(`/admin/face-verifications/${id}/review`, { approved }); }
+export async function getAttemptsForGrading(assessmentId) { return api.get(`/assessments/${assessmentId}/attempts-for-grading`); }
+export async function createFaceVerification(attemptId, capturedImage, matchResult) { return api.post('/face-verifications', { attemptId, capturedImage, matchResult }); }
+export async function createVideoFaceVerification(materialId, capturedImage, matchResult) { return api.post('/video-face-verifications', { materialId, capturedImage, matchResult }); }
+export async function getVideoTrackingStats(materialId) { return api.get(`/materials/${materialId}/video-tracking`); }
+export async function gradeAttempt(attemptId, answers) { return api.post(`/attempts/${attemptId}/grade`, { answers }); }
+export async function startAttempt(assessmentId) { return api.post(`/assessments/${assessmentId}/attempts`); }
+export async function getAttempt(attemptId) { return api.get(`/attempts/${attemptId}`); }
+export async function saveAnswer(attemptId, questionId, data) { return api.patch(`/attempts/${attemptId}/answers`, { questionId, ...data }); }
+export async function pauseAttempt(attemptId, remainingSeconds, currentQuestionIdx, answers) { return api.post(`/attempts/${attemptId}/pause`, { remainingSeconds, currentQuestionIdx, answers }); }
+export async function autoSaveAttempt(attemptId, answers, remainingSeconds, currentQuestionIdx) { return api.post(`/attempts/${attemptId}/auto-save`, { answers, remainingSeconds, currentQuestionIdx }); }
+export async function submitAttempt(attemptId) { return api.post(`/attempts/${attemptId}/submit`); }
+
+// ==================== MATERIALS ====================
+export async function getCourseMaterials(courseId) { return api.get(`/courses/${courseId}/materials`); }
+export async function createMaterial(courseId, data) { return api.post(`/courses/${courseId}/materials`, data); }
+export async function updateMaterial(materialId, data) { return api.put(`/materials/${materialId}`, data); }
+export async function deleteMaterial(materialId) { return api.del(`/materials/${materialId}`); }
+export async function recordMaterialView(materialId) { return api.post(`/materials/${materialId}/view`); }
+export async function closeMaterialView(viewId) { return api.patch(`/material-views/${viewId}/close`); }
 export async function getMaterialHtml(materialId) {
   const res = await fetch(`${API_BASE}/materials/${materialId}/html`, {
-    headers: { Authorization: `Bearer ${getToken()}` },
+    headers: { Authorization: `Bearer ${localStorage.getItem('accessToken')}` },
   });
   if (!res.ok) throw new Error('Failed to load HTML material');
   return res.text();
 }
+export async function saveReadingProgress(materialId, progress) { return api.post(`/materials/${materialId}/progress`, progress); }
+export async function getReadingProgress(materialId) { return api.get(`/materials/${materialId}/progress`); }
+export async function getAllReadingProgress(materialId) { return api.get(`/materials/${materialId}/progress-all`); }
+export async function getCourseMaterialStats(courseId) { return api.get(`/courses/${courseId}/material-stats`); }
 
-// Save reading progress for PPTX materials
-export async function saveReadingProgress(materialId, progress) {
-  return apiFetch(`/materials/${materialId}/progress`, {
-    method: 'POST',
-    body: JSON.stringify(progress),
-  });
-}
+// ==================== LIVE SESSIONS ====================
+export async function getCourseLiveSessions(courseId) { return api.get(`/courses/${courseId}/live-sessions`); }
+export async function getClassLiveSessions(classId) { return api.get(`/classes/${classId}/live-sessions`); }
+export async function getUpcomingLiveSessions() { return api.get('/live-sessions/upcoming'); }
+export async function createLiveSession(courseId, data) { return api.post(`/courses/${courseId}/live-sessions`, data); }
+export async function updateLiveSession(sessionId, data) { return api.patch(`/live-sessions/${sessionId}`, data); }
+export async function deleteLiveSession(sessionId) { return api.del(`/live-sessions/${sessionId}`); }
+export async function getLiveSession(sessionId) { return api.get(`/live-sessions/${sessionId}`); }
+export async function joinLiveSession(sessionId) { return api.post(`/live-sessions/${sessionId}/join`); }
+export async function leaveLiveSession(sessionId) { return api.post(`/live-sessions/${sessionId}/leave`); }
+export async function endLiveSession(sessionId) { return api.post(`/live-sessions/${sessionId}/end`); }
+export async function getLiveSessionAttendance(sessionId) { return api.get(`/live-sessions/${sessionId}/attendance`); }
+export async function reportFaceAlert(sessionId) { return api.post(`/live-sessions/${sessionId}/face-alert`); }
 
-// Get student's reading progress for a material
-export async function getReadingProgress(materialId) {
-  return apiFetch(`/materials/${materialId}/progress`);
-}
+// ==================== STUDENT PROFILE ====================
+export async function getStudentProfile() { return api.get('/student/profile'); }
+export async function updateStudentProfile(data) { return api.patch('/student/profile', data); }
+export async function uploadStudentDocument(documentType, fileName, fileUrl) { return api.post('/student/profile/documents', { documentType, fileName, fileUrl }); }
+export async function deleteStudentDocument(documentId) { return api.del(`/student/profile/documents/${documentId}`); }
+export async function getPendingStudentProfiles() { return api.get('/admin/student-profiles/pending'); }
+export async function getAllStudentProfiles(status) { return api.get(`/admin/student-profiles${status ? `?status=${status}` : ''}`); }
+export async function getStudentProfileById(profileId) { return api.get(`/admin/student-profiles/${profileId}`); }
+export async function approveStudentProfile(profileId) { return api.post(`/admin/student-profiles/${profileId}/approve`); }
+export async function rejectStudentProfile(profileId, reason) { return api.post(`/admin/student-profiles/${profileId}/reject`, { reason }); }
 
-// Teacher: Get all students' reading progress for a material
-export async function getAllReadingProgress(materialId) {
-  return apiFetch(`/materials/${materialId}/progress-all`);
-}
+// ==================== NOTIFICATIONS ====================
+export async function getAdminNotifications() { return api.get('/admin/notifications'); }
+export async function getNotifications() { return api.get('/notifications'); }
+export async function markNotificationRead(id) { return api.patch(`/notifications/${id}/read`); }
+export async function markAllNotificationsRead() { return api.post('/notifications/read-all'); }
 
-export async function getCourseMaterialStats(courseId) {
-  return apiFetch(`/courses/${courseId}/material-stats`);
-}
-
-// Live Sessions
-export async function getCourseLiveSessions(courseId) {
-  return apiFetch(`/courses/${courseId}/live-sessions`);
-}
-
-export async function getClassLiveSessions(classId) {
-  return apiFetch(`/classes/${classId}/live-sessions`);
-}
-
-export async function getUpcomingLiveSessions() {
-  return apiFetch('/live-sessions/upcoming');
-}
-
-export async function createLiveSession(courseId, data) {
-  return apiFetch(`/courses/${courseId}/live-sessions`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function updateLiveSession(sessionId, data) {
-  return apiFetch(`/live-sessions/${sessionId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteLiveSession(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}`, { method: 'DELETE' });
-}
-
-export async function getLiveSession(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}`);
-}
-
-// Live Session Attendance
-export async function joinLiveSession(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}/join`, { method: 'POST' });
-}
-
-export async function leaveLiveSession(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}/leave`, { method: 'POST' });
-}
-
-export async function endLiveSession(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}/end`, { method: 'POST' });
-}
-
-export async function getLiveSessionAttendance(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}/attendance`);
-}
-
-// Student Profile
-export async function getStudentProfile() {
-  return apiFetch('/student/profile');
-}
-
-export async function updateStudentProfile(data) {
-  return apiFetch('/student/profile', { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function uploadStudentDocument(documentType, fileName, fileUrl) {
-  return apiFetch('/student/profile/documents', { 
-    method: 'POST', 
-    body: JSON.stringify({ documentType, fileName, fileUrl }) 
-  });
-}
-
-export async function deleteStudentDocument(documentId) {
-  return apiFetch(`/student/profile/documents/${documentId}`, { method: 'DELETE' });
-}
-
-// Admin - Student Profiles
-export async function getPendingStudentProfiles() {
-  return apiFetch('/admin/student-profiles/pending');
-}
-
-export async function getAllStudentProfiles(status) {
-  const query = status ? `?status=${status}` : '';
-  return apiFetch(`/admin/student-profiles${query}`);
-}
-
-export async function getStudentProfileById(profileId) {
-  return apiFetch(`/admin/student-profiles/${profileId}`);
-}
-
-export async function approveStudentProfile(profileId) {
-  return apiFetch(`/admin/student-profiles/${profileId}/approve`, { method: 'POST' });
-}
-
-export async function rejectStudentProfile(profileId, reason) {
-  return apiFetch(`/admin/student-profiles/${profileId}/reject`, { 
-    method: 'POST', 
-    body: JSON.stringify({ reason }) 
-  });
-}
-
-// Notifications
-export async function getAdminNotifications() {
-  return apiFetch('/admin/notifications');
-}
-
-// ==================== Academic Management ====================
-
-// Academic Years (Admin)
-export async function createAcademicYear(data) {
-  return apiFetch('/admin/academic-years', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function getAcademicYears() {
-  return apiFetch('/admin/academic-years');
-}
-
-export async function updateAcademicYear(id, data) {
-  return apiFetch(`/admin/academic-years/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteAcademicYear(id) {
-  return apiFetch(`/admin/academic-years/${id}`, { method: 'DELETE' });
-}
-
-// Semesters (Admin)
+// ==================== ACADEMIC MANAGEMENT ====================
+export async function createAcademicYear(data) { return api.post('/admin/academic-years', data); }
+export async function getAcademicYears() { return api.get('/admin/academic-years'); }
+export async function updateAcademicYear(id, data) { return api.patch(`/admin/academic-years/${id}`, data); }
+export async function deleteAcademicYear(id) { return api.del(`/admin/academic-years/${id}`); }
 export async function createSemester(data) {
   const sanitized = { ...data };
   if (sanitized.registrationFee !== '' && sanitized.registrationFee !== undefined) {
     sanitized.registrationFee = parseFloat(sanitized.registrationFee) || null;
-  } else {
-    sanitized.registrationFee = null;
-  }
-  return apiFetch('/admin/semesters', { method: 'POST', body: JSON.stringify(sanitized) });
+  } else { sanitized.registrationFee = null; }
+  return api.post('/admin/semesters', sanitized);
 }
-
-export async function getSemesters() {
-  return apiFetch('/admin/semesters');
-}
-
-export async function getCurrentSemester() {
-  return apiFetch('/semesters/current');
-}
-
+export async function getSemesters() { return api.get('/admin/semesters'); }
+export async function getCurrentSemester() { return api.get('/semesters/current'); }
 export async function updateSemester(id, data) {
   const sanitized = { ...data };
   if (sanitized.registrationFee !== '' && sanitized.registrationFee !== undefined) {
     sanitized.registrationFee = parseFloat(sanitized.registrationFee) || null;
-  } else if (sanitized.registrationFee === '') {
-    sanitized.registrationFee = null;
-  }
-  return apiFetch(`/admin/semesters/${id}`, { method: 'PATCH', body: JSON.stringify(sanitized) });
+  } else if (sanitized.registrationFee === '') { sanitized.registrationFee = null; }
+  return api.patch(`/admin/semesters/${id}`, sanitized);
 }
-
-export async function deleteSemester(id) {
-  return apiFetch(`/admin/semesters/${id}`, { method: 'DELETE' });
+export async function deleteSemester(id) { return api.del(`/admin/semesters/${id}`); }
+export async function publishSemesterGrades(semesterId) { return api.post(`/admin/semesters/${semesterId}/publish-grades`); }
+export async function getSemesterGPAReport(semesterId) { return api.get(`/admin/semesters/${semesterId}/gpa-report`); }
+export async function createCourseSection(data) { return api.post('/admin/course-sections', data); }
+export async function getCourseSections(semesterId) { return api.get(`/admin/course-sections${semesterId ? `?semesterId=${semesterId}` : ''}`); }
+export async function updateCourseSection(id, data) { return api.patch(`/admin/course-sections/${id}`, data); }
+export async function deleteCourseSection(id) { return api.del(`/admin/course-sections/${id}`); }
+export async function enrollStudent(data) { return api.post('/admin/enrollments', data); }
+export async function getSectionEnrollments(sectionId) { return api.get(`/admin/course-sections/${sectionId}/enrollments`); }
+export async function removeEnrollment(enrollmentId) { return api.del(`/admin/enrollments/${enrollmentId}`); }
+export async function getAvailableCourses() { return api.get('/student/available-courses'); }
+export async function registerForSemester() { return api.post('/student/register-semester'); }
+export async function getMyEnrollments() { return api.get('/student/my-courses'); }
+export async function getMyResults(semesterId) { return api.get(`/student/results${semesterId ? `/${semesterId}` : ''}`); }
+export async function getMyCGPA() { return api.get('/student/cgpa'); }
+export async function getTeacherSections() { return api.get('/teacher/my-sections'); }
+export async function getMyWeeklySchedule() { return api.get('/student/my-schedule'); }
+export async function getTeacherWeeklySchedule() { return api.get('/teacher/my-schedule'); }
+export async function createScheduleSlot(sectionId, data) { return api.post(`/admin/course-sections/${sectionId}/schedule-slots`, data); }
+export async function deleteScheduleSlot(slotId) { return api.del(`/admin/schedule-slots/${slotId}`); }
+export async function getAuditLogs(params = {}) {
+  const query = new URLSearchParams();
+  if (params.page) query.set('page', params.page);
+  if (params.limit) query.set('limit', params.limit);
+  if (params.action) query.set('action', params.action);
+  if (params.category) query.set('category', params.category);
+  if (params.userId) query.set('userId', params.userId);
+  if (params.search) query.set('search', params.search);
+  if (params.startDate) query.set('startDate', params.startDate);
+  if (params.endDate) query.set('endDate', params.endDate);
+  const qs = query.toString();
+  return api.get(`/admin/audit-logs${qs ? '?' + qs : ''}`);
 }
-
-export async function publishSemesterGrades(semesterId) {
-  return apiFetch(`/admin/semesters/${semesterId}/publish-grades`, { method: 'POST' });
+export async function getAdminResults(params = {}) {
+  const query = new URLSearchParams();
+  if (params.semesterId) query.set('semesterId', params.semesterId);
+  if (params.sectionId) query.set('sectionId', params.sectionId);
+  if (params.studentId) query.set('studentId', params.studentId);
+  const qs = query.toString();
+  return api.get(`/admin/results${qs ? '?' + qs : ''}`);
 }
+export async function getSectionStudents(sectionId) { return api.get(`/teacher/sections/${sectionId}/students`); }
+export async function enterGrade(data) { return api.post('/teacher/grades', data); }
+export async function submitSectionGrades(sectionId) { return api.post(`/teacher/sections/${sectionId}/submit-grades`); }
+export async function syncAssessmentsToGrades(sectionId) { return api.post(`/teacher/sections/${sectionId}/sync-assessments`); }
+export async function getLiveAttendanceStats(sectionId) { return api.get(`/course-sections/${sectionId}/live-attendance`); }
+export async function syncAttendanceToGrades(sectionId) { return api.post(`/course-sections/${sectionId}/sync-attendance`); }
+export async function createManualAttendance(sectionId, data) { return api.post(`/course-sections/${sectionId}/manual-attendance`, data); }
+export async function getManualAttendanceSessions(sectionId) { return api.get(`/course-sections/${sectionId}/manual-attendance`); }
+export async function deleteManualAttendanceSession(sessionId) { return api.del(`/manual-attendance/${sessionId}`); }
+export async function createExamSchedule(data) { return api.post('/teacher/exam-schedules', data); }
+export async function getSectionExamSchedules(sectionId) { return api.get(`/teacher/sections/${sectionId}/exam-schedules`); }
+export async function updateExamSchedule(id, data) { return api.patch(`/teacher/exam-schedules/${id}`, data); }
+export async function deleteExamSchedule(id) { return api.del(`/teacher/exam-schedules/${id}`); }
+export async function proposeEarlyExam(id, data) { return api.post(`/teacher/exam-schedules/${id}/propose-early`, data); }
+export async function cancelEarlyExamProposal(id) { return api.del(`/teacher/exam-schedules/${id}/propose-early`); }
+export async function getEarlyExamResponses(examScheduleId) { return api.get(`/teacher/exam-schedules/${examScheduleId}/early-responses`); }
+export async function confirmEarlyExam(examScheduleId) { return api.post(`/teacher/exam-schedules/${examScheduleId}/confirm-early`); }
+export async function getStudentExamSchedules() { return api.get('/student/exam-schedules'); }
+export async function respondToEarlyExamProposal(examScheduleId, agreed) { return api.post(`/student/exam-schedules/${examScheduleId}/respond`, { agreed }); }
 
-export async function getSemesterGPAReport(semesterId) {
-  return apiFetch(`/admin/semesters/${semesterId}/gpa-report`);
-}
+// ==================== QUESTION REPORTS ====================
+export async function reportQuestion(questionId, reason) { return api.post(`/questions/${questionId}/report`, { reason }); }
+export async function getMyQuestionReports() { return api.get('/my/question-reports'); }
+export async function deleteMyQuestionReport(reportId) { return api.del(`/my/question-reports/${reportId}`); }
+export async function getTeacherQuestionReports(status = 'ALL') { return api.get(`/teacher/question-reports${status !== 'ALL' ? `?status=${status}` : ''}`); }
+export async function updateQuestionReportStatus(reportId, data) { return api.patch(`/teacher/question-reports/${reportId}`, data); }
+export async function getTeacherQuestionReportsCount() { return api.get('/teacher/question-reports/count'); }
 
-// Course Sections (Admin)
-export async function createCourseSection(data) {
-  return apiFetch('/admin/course-sections', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function getCourseSections(semesterId) {
-  const query = semesterId ? `?semesterId=${semesterId}` : '';
-  return apiFetch(`/admin/course-sections${query}`);
-}
-
-export async function updateCourseSection(id, data) {
-  return apiFetch(`/admin/course-sections/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteCourseSection(id) {
-  const res = await fetch(`${API_BASE}/admin/course-sections/${id}`, {
-    method: 'DELETE',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-    },
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `HTTP ${res.status}`);
-  }
-  // 204 No Content - return success
-  return { success: true };
-}
-
-// Enrollments (Admin)
-export async function enrollStudent(data) {
-  return apiFetch('/admin/enrollments', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function getSectionEnrollments(sectionId) {
-  return apiFetch(`/admin/course-sections/${sectionId}/enrollments`);
-}
-
-export async function removeEnrollment(enrollmentId) {
-  return apiFetch(`/admin/enrollments/${enrollmentId}`, { method: 'DELETE' });
-}
-
-// Student - Course Registration
-export async function getAvailableCourses() {
-  return apiFetch('/student/available-courses');
-}
-
-export async function registerForSemester() {
-  return apiFetch('/student/register-semester', { method: 'POST' });
-}
-
-export async function getMyEnrollments() {
-  return apiFetch('/student/my-courses');
-}
-
-// Student - Results
-export async function getMyResults(semesterId) {
-  const query = semesterId ? `/${semesterId}` : '';
-  return apiFetch(`/student/results${query}`);
-}
-
-export async function getMyCGPA() {
-  return apiFetch('/student/cgpa');
-}
-
-// Teacher - Course Sections
-export async function getTeacherSections() {
-  return apiFetch('/teacher/my-sections');
-}
-
-export async function getSectionStudents(sectionId) {
-  return apiFetch(`/teacher/sections/${sectionId}/students`);
-}
-
-// Notifications
-export async function getNotifications() {
-  return apiFetch('/notifications');
-}
-
-export async function markNotificationRead(id) {
-  return apiFetch(`/notifications/${id}/read`, { method: 'PATCH' });
-}
-
-export async function markAllNotificationsRead() {
-  return apiFetch('/notifications/read-all', { method: 'POST' });
-}
-
-export async function enterGrade(data) {
-  return apiFetch('/teacher/grades', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function submitSectionGrades(sectionId) {
-  return apiFetch(`/teacher/sections/${sectionId}/submit-grades`, { method: 'POST' });
-}
-
-export async function syncAssessmentsToGrades(sectionId) {
-  return apiFetch(`/teacher/sections/${sectionId}/sync-assessments`, { method: 'POST' });
-}
-
-export async function getLiveAttendanceStats(sectionId) {
-  return apiFetch(`/course-sections/${sectionId}/live-attendance`);
-}
-
-export async function syncAttendanceToGrades(sectionId) {
-  return apiFetch(`/course-sections/${sectionId}/sync-attendance`, { method: 'POST' });
-}
-
-export async function createManualAttendance(sectionId, data) {
-  return apiFetch(`/course-sections/${sectionId}/manual-attendance`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function getManualAttendanceSessions(sectionId) {
-  return apiFetch(`/course-sections/${sectionId}/manual-attendance`);
-}
-
-export async function deleteManualAttendanceSession(sessionId) {
-  return apiFetch(`/manual-attendance/${sessionId}`, { method: 'DELETE' });
-}
-
-// Teacher - Exam Schedules
-export async function createExamSchedule(data) {
-  return apiFetch('/teacher/exam-schedules', { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function getSectionExamSchedules(sectionId) {
-  return apiFetch(`/teacher/sections/${sectionId}/exam-schedules`);
-}
-
-export async function updateExamSchedule(id, data) {
-  return apiFetch(`/teacher/exam-schedules/${id}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function deleteExamSchedule(id) {
-  return apiFetch(`/teacher/exam-schedules/${id}`, { method: 'DELETE' });
-}
-
-export async function proposeEarlyExam(id, data) {
-  return apiFetch(`/teacher/exam-schedules/${id}/propose-early`, { method: 'POST', body: JSON.stringify(data) });
-}
-
-export async function cancelEarlyExamProposal(id) {
-  return apiFetch(`/teacher/exam-schedules/${id}/propose-early`, { method: 'DELETE' });
-}
-
-export async function getEarlyExamResponses(examScheduleId) {
-  return apiFetch(`/teacher/exam-schedules/${examScheduleId}/early-responses`);
-}
-
-// Question Reports
-export async function reportQuestion(questionId, reason) {
-  return apiFetch(`/questions/${questionId}/report`, { method: 'POST', body: JSON.stringify({ reason }) });
-}
-
-export async function getMyQuestionReports() {
-  return apiFetch('/my/question-reports');
-}
-
-export async function deleteMyQuestionReport(reportId) {
-  return apiFetch(`/my/question-reports/${reportId}`, { method: 'DELETE' });
-}
-
-export async function getTeacherQuestionReports(status = 'ALL') {
-  const query = status !== 'ALL' ? `?status=${status}` : '';
-  return apiFetch(`/teacher/question-reports${query}`);
-}
-
-export async function updateQuestionReportStatus(reportId, data) {
-  return apiFetch(`/teacher/question-reports/${reportId}`, { method: 'PATCH', body: JSON.stringify(data) });
-}
-
-export async function getTeacherQuestionReportsCount() {
-  return apiFetch('/teacher/question-reports/count');
-}
-
-export async function confirmEarlyExam(examScheduleId) {
-  return apiFetch(`/teacher/exam-schedules/${examScheduleId}/confirm-early`, { method: 'POST' });
-}
-
-// Student - Exam Schedules
-export async function getStudentExamSchedules() {
-  return apiFetch('/student/exam-schedules');
-}
-
-export async function respondToEarlyExamProposal(examScheduleId, agreed) {
-  return apiFetch(`/student/exam-schedules/${examScheduleId}/respond`, { method: 'POST', body: JSON.stringify({ agreed }) });
-}
-
-// Add/Drop - Student
-export async function getAddDropEligibility() {
-  return apiFetch('/add-drop/eligibility');
-}
-
-export async function submitAddRequest(courseSectionId, reason) {
-  return apiFetch('/add-drop/add', { method: 'POST', body: JSON.stringify({ courseSectionId, reason }) });
-}
-
-export async function submitDropRequest(enrollmentId, reason) {
-  return apiFetch('/add-drop/drop', { method: 'POST', body: JSON.stringify({ enrollmentId, reason }) });
-}
-
-export async function cancelAddDropRequest(requestId) {
-  return apiFetch(`/add-drop/${requestId}`, { method: 'DELETE' });
-}
-
-// Add/Drop - Admin
+// ==================== ADD/DROP ====================
+export async function getAddDropEligibility() { return api.get('/add-drop/eligibility'); }
+export async function submitAddRequest(courseSectionId, reason) { return api.post('/add-drop/add', { courseSectionId, reason }); }
+export async function submitDropRequest(enrollmentId, reason) { return api.post('/add-drop/drop', { enrollmentId, reason }); }
+export async function cancelAddDropRequest(requestId) { return api.del(`/add-drop/${requestId}`); }
 export async function getAdminAddDropRequests(filters = {}) {
   const params = new URLSearchParams();
   if (filters.status && filters.status !== '') params.append('status', filters.status);
   if (filters.type && filters.type !== '') params.append('type', filters.type);
   if (filters.semesterId && filters.semesterId !== '') params.append('semesterId', filters.semesterId);
   const query = params.toString() ? `?${params.toString()}` : '';
-  return apiFetch(`/admin/add-drop-requests${query}`);
+  return api.get(`/admin/add-drop-requests${query}`);
 }
+export async function approveAddDropRequest(requestId, adminNotes) { return api.post(`/admin/add-drop-requests/${requestId}/approve`, { adminNotes }); }
+export async function rejectAddDropRequest(requestId, adminNotes) { return api.post(`/admin/add-drop-requests/${requestId}/reject`, { adminNotes }); }
+export async function getSemestersAddDrop() { return api.get('/admin/semesters/add-drop'); }
+export async function updateSemesterAddDrop(semesterId, addDropStart, addDropEnd) { return api.patch(`/admin/semesters/${semesterId}/add-drop`, { addDropStart, addDropEnd }); }
 
-export async function approveAddDropRequest(requestId, adminNotes) {
-  return apiFetch(`/admin/add-drop-requests/${requestId}/approve`, { method: 'POST', body: JSON.stringify({ adminNotes }) });
-}
+// ==================== ANALYTICS ====================
+export async function getAdminAnalytics() { return api.get('/analytics/admin'); }
+export async function getTeacherAnalytics() { return api.get('/analytics/teacher'); }
+export async function getTeacherAtRiskStudents() { return api.get('/analytics/teacher/at-risk'); }
+export async function getStudentAnalytics() { return api.get('/analytics/student'); }
+export async function getPublicAnalytics() { return api.get('/analytics/public'); }
 
-export async function rejectAddDropRequest(requestId, adminNotes) {
-  return apiFetch(`/admin/add-drop-requests/${requestId}/reject`, { method: 'POST', body: JSON.stringify({ adminNotes }) });
-}
-
-export async function getSemestersAddDrop() {
-  return apiFetch('/admin/semesters/add-drop');
-}
-
-export async function updateSemesterAddDrop(semesterId, addDropStart, addDropEnd) {
-  return apiFetch(`/admin/semesters/${semesterId}/add-drop`, { method: 'PATCH', body: JSON.stringify({ addDropStart, addDropEnd }) });
-}
-
-// Analytics
-export async function getAdminAnalytics() {
-  return apiFetch('/analytics/admin');
-}
-
-export async function getTeacherAnalytics() {
-  return apiFetch('/analytics/teacher');
-}
-
-export async function getStudentAnalytics() {
-  return apiFetch('/analytics/student');
-}
-
-// ==================== PAYMENT (Chapa) ====================
-
-export async function initializePayment(semesterId) {
-  return apiFetch('/payments/initialize', {
-    method: 'POST',
-    body: JSON.stringify({ semesterId }),
-  });
-}
-
-export async function verifyPayment(txRef) {
-  return apiFetch(`/payments/verify/${txRef}`);
-}
-
-export async function getMyPayments() {
-  return apiFetch('/payments/my');
-}
-
-export async function getPaymentStatus(semesterId) {
-  return apiFetch(`/payments/semester/${semesterId}/status`);
-}
-
-export async function getSemesterPayments(semesterId) {
-  return apiFetch(`/admin/payments/semester/${semesterId}`);
-}
-
-export async function setRegistrationFee(semesterId, registrationFee) {
-  return apiFetch(`/admin/semesters/${semesterId}/fee`, {
-    method: 'PATCH',
-    body: JSON.stringify({ registrationFee }),
-  });
-}
+// ==================== PAYMENT ====================
+export async function initializePayment(semesterId) { return api.post('/payments/initialize', { semesterId }); }
+export async function verifyPayment(txRef) { return api.get(`/payments/verify/${txRef}`); }
+export async function getMyPayments() { return api.get('/payments/my'); }
+export async function getPaymentStatus(semesterId) { return api.get(`/payments/semester/${semesterId}/status`); }
+export async function getSemesterPayments(semesterId) { return api.get(`/admin/payments/semester/${semesterId}`); }
+export async function setRegistrationFee(semesterId, registrationFee) { return api.patch(`/admin/semesters/${semesterId}/fee`, { registrationFee }); }
+export async function getStudentRegistrationFee() { return api.get('/student/registration-fee'); }
 
 // ==================== DEPARTMENTS ====================
-
-export async function getDepartments() {
-  return apiFetch('/departments');
-}
-
-export async function getDepartment(id) {
-  return apiFetch(`/departments/${id}`);
-}
-
-export async function createDepartment(data) {
-  return apiFetch('/admin/departments', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function updateDepartment(id, data) {
-  return apiFetch(`/admin/departments/${id}`, {
-    method: 'PATCH',
-    body: JSON.stringify(data),
-  });
-}
-
-export async function deleteDepartment(id) {
-  return apiFetch(`/admin/departments/${id}`, { method: 'DELETE' });
-}
+export async function getDepartments() { return api.get('/departments'); }
+export async function getDepartment(id) { return api.get(`/departments/${id}`); }
+export async function createDepartment(data) { return api.post('/admin/departments', data); }
+export async function updateDepartment(id, data) { return api.patch(`/admin/departments/${id}`, data); }
+export async function deleteDepartment(id) { return api.del(`/admin/departments/${id}`); }
 
 // ==================== CERTIFICATES ====================
-
-export async function getStudentGraduationStatus() {
-  return apiFetch('/student/graduation-status');
-}
-
-export async function getStudentCertificates() {
-  return apiFetch('/student/certificates');
-}
-
-export async function generateCertificate(studentId) {
-  return apiFetch('/admin/certificates/generate', {
-    method: 'POST',
-    body: JSON.stringify({ studentId }),
-  });
-}
-
-export async function getAdminCertificates() {
-  return apiFetch('/admin/certificates');
-}
-
-export async function getCertificateById(id) {
-  return apiFetch(`/certificates/${id}`);
-}
-
-export async function getJaasToken(sessionId) {
-  return apiFetch(`/live-sessions/${sessionId}/jaas-token`, { method: 'POST' });
-}
-
-export async function getStudentRegistrationFee() {
-  return apiFetch('/student/registration-fee');
-}
+export async function getStudentGraduationStatus() { return api.get('/student/graduation-status'); }
+export async function getStudentCertificates() { return api.get('/student/certificates'); }
+export async function studentGenerateCertificate() { return api.post('/student/generate-certificate'); }
+export async function generateCertificate(studentId) { return api.post('/admin/certificates/generate', { studentId }); }
+export async function getAdminCertificates() { return api.get('/admin/certificates'); }
+export async function getCertificateById(id) { return api.get(`/certificates/${id}`); }
+export async function getStudentTranscript(studentId) { return api.get(studentId ? `/admin/students/${studentId}/transcript` : '/student/transcript'); }
+export async function getJaasToken(sessionId) { return api.post(`/live-sessions/${sessionId}/jaas-token`); }
 
 // ==================== ML PERFORMANCE ====================
-
-export async function trainMLModel() {
-  return apiFetch('/ml/train', { method: 'POST' });
-}
-
-export async function getMLAnalytics() {
-  return apiFetch('/ml/analytics');
-}
-
-export async function getMLFeatureImportance() {
-  return apiFetch('/ml/feature-importance');
-}
-
-export async function predictStudentPerformance(features) {
-  return apiFetch('/ml/predict', {
-    method: 'POST',
-    body: JSON.stringify(features),
-  });
-}
-
-export async function predictStudentById(studentId) {
-  return apiFetch(`/ml/predict-student/${studentId}`);
-}
+export async function trainMLModel() { return api.post('/ml/train'); }
+export async function getMLAnalytics() { return api.get('/ml/analytics'); }
+export async function getMLFeatureImportance() { return api.get('/ml/feature-importance'); }
+export async function predictStudentPerformance(features) { return api.post('/ml/predict', features); }
+export async function predictStudentById(studentId) { return api.get(`/ml/predict-student/${studentId}`); }

@@ -1,9 +1,4 @@
-"""
-Seed synthetic student performance data into the existing Lucy LMS PostgreSQL database.
-Only INSERTs new grade/attendance/engagement rows for existing enrollments.
-Does NOT modify or delete any existing data.
-Run: cd apps/ml && python seed_synthetic.py
-"""
+
 import os, sys, random, math
 import psycopg2
 

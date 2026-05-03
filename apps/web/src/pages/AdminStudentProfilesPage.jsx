@@ -290,7 +290,15 @@ export default function AdminStudentProfilesPage() {
 
                   <h4 className="font-medium text-gray-900 dark:text-white mt-4 mb-2">{t('admin.nationalExamSubjectResults')}</h4>
                   <div className="grid grid-cols-4 md:grid-cols-7 gap-2">
-                    {[
+                    {(selectedProfile.stream === 'Social Science' ? [
+                      { label: 'English', value: selectedProfile.examEnglish },
+                      { label: 'Civics', value: selectedProfile.examCivics },
+                      { label: 'History', value: selectedProfile.examHistory },
+                      { label: 'Economics', value: selectedProfile.examEconomics },
+                      { label: 'Geography', value: selectedProfile.examGeography },
+                      { label: 'Social Math', value: selectedProfile.examSocialMath },
+                      { label: 'Aptitude', value: selectedProfile.examAptitude },
+                    ] : [
                       { label: 'English', value: selectedProfile.examEnglish },
                       { label: 'Physics', value: selectedProfile.examPhysics },
                       { label: 'Civics', value: selectedProfile.examCivics },
@@ -298,7 +306,7 @@ export default function AdminStudentProfilesPage() {
                       { label: 'Chemistry', value: selectedProfile.examChemistry },
                       { label: 'Biology', value: selectedProfile.examBiology },
                       { label: 'Aptitude', value: selectedProfile.examAptitude },
-                    ].map(item => (
+                    ]).map(item => (
                       <div key={item.label} className="text-center p-2 bg-gray-50 dark:bg-gray-700 rounded-lg">
                         <p className="text-xs text-gray-500 dark:text-gray-400">{item.label}</p>
                         <p className="font-bold text-gray-900 dark:text-white">{item.value || '-'}</p>
@@ -370,9 +378,16 @@ export default function AdminStudentProfilesPage() {
                   </div>
                 )}
 
-                {/* Generate Certificate */}
+                {/* Generate Certificate & Transcript */}
                 {selectedProfile.status === 'APPROVED' && (
-                  <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <div className="pt-4 border-t border-gray-200 dark:border-gray-700 space-y-3">
+                    <Link
+                      to={`/admin/students/${selectedProfile.userId}/transcript?admin=1`}
+                      className="w-full py-3 px-4 bg-blue-700 hover:bg-blue-800 text-white font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                    >
+                      <FileText className="w-5 h-5" />
+                      {t('results.viewTranscript')}
+                    </Link>
                     <button
                       onClick={() => handleGenerateCertificate(selectedProfile.userId)}
                       disabled={processing}

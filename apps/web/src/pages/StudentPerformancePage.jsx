@@ -66,7 +66,7 @@ export default function StudentPerformancePage() {
 
       // Students get their own predictions
       if (isStudent && user?.id) {
-        const predData = await predictStudentById(user.id).catch(() => null);
+        const predData = await predictStudentById(user.id).catch(err => { console.error('predictStudentById failed:', err); return null; });
         setPredictions(predData);
       }
     } catch (err) {

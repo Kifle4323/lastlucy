@@ -2,9 +2,9 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
 import { useConfirm } from '../ConfirmContext';
-import { getUsers, adminCreateUser, getPendingUsers, approveUser, deleteUser } from '../api';
+import { getUsers, adminCreateUser, adminUpdateUser, adminResetPassword, getPendingUsers, approveUser, deleteUser } from '../api';
 import Layout from '../components/Layout';
-import { UserCircle, GraduationCap, BookOpen, Shield, Search, Plus, X, AlertCircle, CheckCircle, Clock, Trash2, Check } from 'lucide-react';
+import { UserCircle, GraduationCap, BookOpen, Shield, Search, Plus, X, AlertCircle, CheckCircle, Clock, Trash2, Check, KeyRound, Eye, EyeOff, Pencil } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 // Password validation helper
@@ -43,8 +43,20 @@ export default function AdminUsersPage() {
   const [roleFilter, setRoleFilter] = useState('ALL');
   const [activeTab, setActiveTab] = useState('all'); // 'all' or 'pending'
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [resetUser, setResetUser] = useState(null);
+  const [newPassword, setNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetError, setResetError] = useState('');
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({ fullName: '', email: '', role: 'STUDENT', isApproved: true });
+  const [editLoading, setEditLoading] = useState(false);
+  const [editError, setEditError] = useState('');
   const [createLoading, setCreateLoading] = useState(false);
   const [createError, setCreateError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const [createSuccess, setCreateSuccess] = useState('');
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [newUser, setNewUser] = useState({
@@ -76,10 +88,15 @@ export default function AdminUsersPage() {
   const handleCreateUser = async (e) => {
     e.preventDefault();
     setCreateError('');
+    setFieldErrors({});
     setCreateSuccess('');
     
     if (!isValid) {
       setCreateError(t('admin.passwordRequirements'));
+      return;
+    }
+    if (/\d/.test(newUser.fullName)) {
+      setCreateError(t('register.nameNoNumbers'));
       return;
     }
     
@@ -95,7 +112,17 @@ export default function AdminUsersPage() {
         setCreateSuccess('');
       }, 2000);
     } catch (err) {
-      setCreateError(err.message || t('admin.failedCreateUser'));
+      if (err.details && Array.isArray(err.details)) {
+        const errors = {};
+        err.details.forEach(d => {
+          const field = d.path.join('.');
+          errors[field] = d.message;
+        });
+        setFieldErrors(errors);
+        setCreateError(t('admin.correctErrors'));
+      } else {
+        setCreateError(err.message || t('admin.failedCreateUser'));
+      }
     } finally {
       setCreateLoading(false);
     }
@@ -126,6 +153,59 @@ export default function AdminUsersPage() {
       toast.success(t('admin.userRejectedDeleted'));
     } catch (err) {
       toast.error(t('admin.failedRejectUser'));
+    }
+  };
+
+  const handleOpenResetPassword = (u) => {
+    setResetUser(u);
+    setNewPassword('');
+    setResetError('');
+    setShowNewPassword(false);
+    setShowResetModal(true);
+  };
+
+  const handleResetPassword = async (e) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setResetError(t('admin.passwordRequirements'));
+      return;
+    }
+    setResetLoading(true);
+    setResetError('');
+    try {
+      await adminResetPassword(resetUser.id, newPassword);
+      toast.success(t('admin.passwordResetSuccess', { name: resetUser.fullName }));
+      setShowResetModal(false);
+      setResetUser(null);
+      setNewPassword('');
+    } catch (err) {
+      setResetError(err.message || t('admin.failedResetPassword'));
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleOpenEditUser = (u) => {
+    setEditUser(u);
+    setEditForm({ fullName: u.fullName, email: u.email, role: u.role, isApproved: u.isApproved });
+    setEditError('');
+    setShowEditModal(true);
+  };
+
+  const handleEditUser = async (e) => {
+    e.preventDefault();
+    setEditLoading(true);
+    setEditError('');
+    try {
+      const updated = await adminUpdateUser(editUser.id, editForm);
+      setUsers(users.map(u => u.id === editUser.id ? { ...u, ...updated } : u));
+      toast.success(t('admin.userUpdatedSuccess', { name: editForm.fullName }));
+      setShowEditModal(false);
+      setEditUser(null);
+    } catch (err) {
+      setEditError(err.message || t('admin.failedUpdateUser'));
+    } finally {
+      setEditLoading(false);
     }
   };
 
@@ -198,7 +278,7 @@ export default function AdminUsersPage() {
                   <input
                     type="text"
                     value={newUser.fullName}
-                    onChange={(e) => setNewUser({ ...newUser, fullName: e.target.value })}
+                    onChange={(e) => setNewUser({ ...newUser, fullName: e.target.value.replace(/[^a-zA-Z\s\u1200-\u137F\u1380-\u139F\u2C80-\u2CFF]/g, '') })}
                     required
                     className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
                     placeholder="John Doe"
@@ -210,11 +290,12 @@ export default function AdminUsersPage() {
                   <input
                     type="email"
                     value={newUser.email}
-                    onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
+                    onChange={(e) => { setNewUser({ ...newUser, email: e.target.value }); setFieldErrors(prev => { const { email, ...rest } = prev; return rest; }); }}
                     required
-                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                    className={`w-full px-4 py-3 border ${fieldErrors.email ? 'border-red-500' : 'border-gray-200 dark:border-gray-600'} dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none`}
                     placeholder="user@example.com"
                   />
+                  {fieldErrors.email && <p className="mt-1 text-sm text-red-600">{fieldErrors.email}</p>}
                 </div>
 
                 <div>
@@ -458,6 +539,7 @@ export default function AdminUsersPage() {
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">{t('admin.user')}</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">{t('admin.role')}</th>
                 <th className="text-left px-6 py-3 text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">{t('admin.joined')}</th>
+                <th className="text-right px-6 py-3 text-xs font-medium text-gray-500 dark:text-gray-300 uppercase tracking-wider">{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -494,6 +576,24 @@ export default function AdminUsersPage() {
                   <td className="px-6 py-4 text-sm text-gray-500 dark:text-gray-400">
                     {new Date(u.createdAt).toLocaleDateString()}
                   </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <button
+                        onClick={() => handleOpenEditUser(u)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-blue-700 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-lg transition-colors"
+                      >
+                        <Pencil className="w-4 h-4" />
+                        {t('common.edit')}
+                      </button>
+                      <button
+                        onClick={() => handleOpenResetPassword(u)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-primary-700 dark:text-primary-400 bg-primary-50 dark:bg-primary-900/30 hover:bg-primary-100 dark:hover:bg-primary-900/50 rounded-lg transition-colors"
+                      >
+                        <KeyRound className="w-4 h-4" />
+                        {t('admin.resetPassword')}
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -503,6 +603,185 @@ export default function AdminUsersPage() {
               {t('admin.noUsersFound')}
             </div>
           )}
+          </div>
+        )}
+
+        {/* Reset Password Modal */}
+        {showResetModal && resetUser && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-primary-100 dark:bg-primary-900 rounded-full flex items-center justify-center">
+                    <KeyRound className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-900 dark:text-white">{t('admin.resetPassword')}</h2>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">{resetUser.fullName} ({resetUser.email})</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setShowResetModal(false); setResetUser(null); }}
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                >
+                  <X className="w-5 h-5 dark:text-gray-300" />
+                </button>
+              </div>
+
+              <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/30 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+                <p className="text-sm text-yellow-700 dark:text-yellow-400">{t('admin.resetPasswordNote')}</p>
+              </div>
+
+              {resetError && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm">{resetError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleResetPassword} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('admin.newPassword')}</label>
+                  <div className="relative">
+                    <input
+                      type={showNewPassword ? 'text' : 'password'}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      required
+                      minLength={6}
+                      className="w-full pl-4 pr-11 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                      placeholder={t('admin.passwordPlaceholder')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
+                    >
+                      {showNewPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                  {newPassword && (
+                    <div className="mt-2 p-2 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-0.5">
+                      <PasswordCheck valid={newPassword.length >= 6} text={t('admin.atLeast6Chars')} />
+                      <PasswordCheck valid={/[A-Z]/.test(newPassword)} text={t('admin.atLeastOneUppercase')} />
+                      <PasswordCheck valid={/[a-z]/.test(newPassword)} text={t('admin.atLeastOneLowercase')} />
+                      <PasswordCheck valid={/[0-9]/.test(newPassword)} text={t('admin.atLeastOneNumber')} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowResetModal(false); setResetUser(null); }}
+                    className="flex-1 py-3 px-4 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 font-medium rounded-lg transition-colors"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetLoading || newPassword.length < 6}
+                    className="flex-1 py-3 px-4 bg-primary-900 hover:bg-primary-800 dark:bg-primary-700 dark:hover:bg-primary-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {resetLoading ? t('admin.resetting') : t('admin.resetPassword')}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Edit User Modal */}
+        {showEditModal && editUser && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center">
+                    <Pencil className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                  </div>
+                  <h2 className="text-lg font-bold text-gray-900 dark:text-white">{t('admin.editUser')}</h2>
+                </div>
+                <button
+                  onClick={() => { setShowEditModal(false); setEditUser(null); }}
+                  className="p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded"
+                >
+                  <X className="w-5 h-5 dark:text-gray-300" />
+                </button>
+              </div>
+
+              {editError && (
+                <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400">
+                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                  <span className="text-sm">{editError}</span>
+                </div>
+              )}
+
+              <form onSubmit={handleEditUser} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('admin.fullName')}</label>
+                  <input
+                    type="text"
+                    value={editForm.fullName}
+                    onChange={(e) => setEditForm({ ...editForm, fullName: e.target.value.replace(/[^a-zA-Z\s\u1200-\u137F\u1380-\u139F\u2C80-\u2CFF]/g, '') })}
+                    required
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('common.email')}</label>
+                  <input
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                    required
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('admin.role')}</label>
+                  <select
+                    value={editForm.role}
+                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                    className="w-full px-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                  >
+                    <option value="STUDENT">{t('nav.students')}</option>
+                    <option value="TEACHER">{t('nav.teachers')}</option>
+                    <option value="ADMIN">{t('admin.admins')}</option>
+                  </select>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <label className="text-sm font-medium text-gray-700 dark:text-gray-300">{t('admin.approved')}</label>
+                  <button
+                    type="button"
+                    onClick={() => setEditForm({ ...editForm, isApproved: !editForm.isApproved })}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${editForm.isApproved ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'}`}
+                  >
+                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${editForm.isApproved ? 'translate-x-6' : 'translate-x-1'}`} />
+                  </button>
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => { setShowEditModal(false); setEditUser(null); }}
+                    className="flex-1 py-3 px-4 bg-gray-200 dark:bg-gray-600 hover:bg-gray-300 dark:hover:bg-gray-500 text-gray-700 dark:text-gray-200 font-medium rounded-lg transition-colors"
+                  >
+                    {t('common.cancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={editLoading}
+                    className="flex-1 py-3 px-4 bg-primary-900 hover:bg-primary-800 dark:bg-primary-700 dark:hover:bg-primary-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    {editLoading ? t('admin.saving') : t('common.save')}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
         )}
       </div>

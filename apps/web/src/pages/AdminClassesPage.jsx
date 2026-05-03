@@ -35,6 +35,7 @@ export default function AdminClassesPage() {
   const [departments, setDepartments] = useState([]);
   const [editingClass, setEditingClass] = useState(null);
   const [addModal, setAddModal] = useState({ type: null, classId: null });
+  const [expandedClassStudents, setExpandedClassStudents] = useState({});
 
   useEffect(() => {
     if (user?.role !== 'ADMIN') return;
@@ -107,12 +108,10 @@ export default function AdminClassesPage() {
 
   const handleAddStudent = async (studentId) => {
     try {
-      const result = await addStudentToClass(addModal.classId, studentId);
-      setClasses(classes.map(c => 
-        c.id === addModal.classId 
-          ? { ...c, students: [...(c.students || []), result] }
-          : c
-      ));
+      await addStudentToClass(addModal.classId, studentId);
+      // Reload classes to get proper student data with includes
+      const updated = await getClasses();
+      setClasses(updated);
       toast.success(t('admin.studentAddedToClass'));
     } catch (err) {
       toast.error(err.message);
@@ -143,12 +142,10 @@ export default function AdminClassesPage() {
 
   const handleAddTeacher = async (teacherId) => {
     try {
-      const result = await addTeacherToClass(addModal.classId, teacherId);
-      setClasses(classes.map(c => 
-        c.id === addModal.classId 
-          ? { ...c, teachers: [...(c.teachers || []), result] }
-          : c
-      ));
+      await addTeacherToClass(addModal.classId, teacherId);
+      // Reload classes to get proper teacher data with includes
+      const updated = await getClasses();
+      setClasses(updated);
       toast.success(t('admin.teacherAddedToClass'));
     } catch (err) {
       toast.error(err.message);
@@ -285,28 +282,74 @@ export default function AdminClassesPage() {
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium text-gray-700">{t('nav.students')} ({cls.students?.length || 0})</span>
-                      <button
-                        onClick={() => setAddModal({ type: 'student', classId: cls.id })}
-                        className="p-1 hover:bg-gray-100 rounded text-primary-600"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                      </button>
-                    </div>
-                    <div className="flex flex-wrap gap-1">
-                      {cls.students?.slice(0, 3).map((s) => (
-                        <span key={s.id} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded">
-                          {s.student.fullName}
-                          <button onClick={() => handleRemoveStudent(cls.id, s.studentId)} className="hover:text-red-600">
-                            <X className="w-3 h-3" />
+                      <div className="flex items-center gap-1">
+                        {cls.students?.length > 0 && (
+                          <button
+                            onClick={() => setExpandedClassStudents(prev => ({ ...prev, [cls.id]: !prev[cls.id] }))}
+                            className="p-1 hover:bg-gray-100 rounded text-gray-500 hover:text-primary-600"
+                            title={expandedClassStudents[cls.id] ? t('admin.collapseStudents') : t('admin.viewAllStudents')}
+                          >
+                            <ChevronRight className={`w-4 h-4 transition-transform ${expandedClassStudents[cls.id] ? 'rotate-90' : ''}`} />
                           </button>
-                        </span>
-                      ))}
-                      {cls.students?.length > 3 && (
-                        <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs rounded">
-                          +{cls.students.length - 3} {t('admin.more')}
-                        </span>
-                      )}
+                        )}
+                        <button
+                          onClick={() => setAddModal({ type: 'student', classId: cls.id })}
+                          className="p-1 hover:bg-gray-100 rounded text-primary-600"
+                          title={t('admin.addStudent')}
+                        >
+                          <UserPlus className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
+                    {cls.students?.length === 0 && (
+                      <p className="text-xs text-gray-400 italic">{t('admin.noStudentsYet')}</p>
+                    )}
+                    {/* Collapsed: show first 3 chips */}
+                    {!expandedClassStudents[cls.id] && cls.students?.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {cls.students.slice(0, 3).map((s) => (
+                          <span key={s.id} className="inline-flex items-center gap-1 px-2 py-1 bg-gray-100 text-gray-700 text-xs rounded">
+                            {s.student.fullName}
+                            <button onClick={() => handleRemoveStudent(cls.id, s.studentId)} className="hover:text-red-600">
+                              <X className="w-3 h-3" />
+                            </button>
+                          </span>
+                        ))}
+                        {cls.students.length > 3 && (
+                          <button
+                            onClick={() => setExpandedClassStudents(prev => ({ ...prev, [cls.id]: true }))}
+                            className="px-2 py-1 bg-gray-100 text-primary-600 text-xs rounded hover:bg-gray-200"
+                          >
+                            +{cls.students.length - 3} {t('admin.more')}
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {/* Expanded: full list with remove buttons */}
+                    {expandedClassStudents[cls.id] && cls.students?.length > 0 && (
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {cls.students.map((s) => (
+                          <div key={s.id} className="flex items-center justify-between p-2 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 bg-primary-100 rounded-full flex items-center justify-center">
+                                <span className="text-primary-700 text-xs font-semibold">{s.student.fullName.charAt(0)}</span>
+                              </div>
+                              <div>
+                                <p className="text-sm font-medium text-gray-900">{s.student.fullName}</p>
+                                <p className="text-xs text-gray-500">{s.student.email}</p>
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => handleRemoveStudent(cls.id, s.studentId)}
+                              className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded"
+                              title={t('admin.removeStudent')}
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
 
                   {/* Teachers */}

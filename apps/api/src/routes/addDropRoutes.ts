@@ -3,6 +3,7 @@ import type { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { authRequired, requireRole, type AuthedRequest } from '../middleware';
+import { createAuditLog } from '../auditLog';
 
 export function registerAddDropRoutes(router: Router) {
   // Student: Get add/drop eligibility and available courses
@@ -154,7 +155,7 @@ export function registerAddDropRoutes(router: Router) {
         return;
       }
       
-      // Check if already enrolled
+      // Check if already enrolled in this section
       const existingEnrollment = await prisma.studentEnrollment.findFirst({
         where: {
           studentId: user.id,
@@ -165,6 +166,27 @@ export function registerAddDropRoutes(router: Router) {
       if (existingEnrollment) {
         res.status(400).json({ error: 'Already enrolled in this course' });
         return;
+      }
+
+      // Check if student already PASSED this course (allow retaking failed ones)
+      const previousEnrollment = await prisma.studentEnrollment.findFirst({
+        where: {
+          studentId: user.id,
+          courseSection: { courseId: courseSection.courseId },
+          status: 'ENROLLED',
+          grade: { isSubmitted: true },
+        },
+        include: { courseSection: { include: { course: { select: { title: true } }, semester: { select: { name: true } } } }, grade: true },
+      });
+
+      if (previousEnrollment && previousEnrollment.grade) {
+        const passed = previousEnrollment.grade.gradeLetter !== 'F' && (previousEnrollment.grade.totalScore ?? 0) >= 40;
+        if (passed) {
+          res.status(400).json({
+            error: `You already passed ${previousEnrollment.courseSection.course?.title || 'this course'} (${previousEnrollment.grade.gradeLetter}) in ${previousEnrollment.courseSection.semester?.name || 'a previous semester'}. Cannot retake a passed course.`,
+          });
+          return;
+        }
       }
       
       // Check for existing pending request
@@ -198,7 +220,8 @@ export function registerAddDropRoutes(router: Router) {
           courseSection: { include: { teacher: { select: { fullName: true } } } },
         },
       });
-      
+
+      createAuditLog({ userId: user.id, userRole: 'STUDENT', action: 'ADD_DROP_REQUEST', category: 'ADD_DROP', targetId: addRequest.id, targetType: 'AddDropRequest', description: `Student requested to add ${addRequest.course?.title || 'course'}`, ipAddress: req.ip });
       res.json(addRequest);
     } catch (err) {
       console.error('Error creating add request:', err);
@@ -454,6 +477,7 @@ export function registerAddDropRoutes(router: Router) {
         },
       });
       
+      createAuditLog({ userId: user.id, userRole: 'ADMIN', action: 'ADD_DROP_APPROVE', category: 'ADD_DROP', targetId: params.requestId, targetType: 'AddDropRequest', description: `Admin approved ${request.type.toLowerCase()} request for ${updatedRequest?.student?.fullName || 'student'} - ${updatedRequest?.course?.title || 'course'}`, ipAddress: req.ip });
       res.json(updatedRequest);
     } catch (err) {
       console.error('Error approving request:', err);

@@ -27,6 +27,16 @@ enum ExamType {
   ASSIGNMENT
 }
 
+enum DayOfWeek {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
 enum DeliveryMode {
   ONLINE
   PAPER
@@ -78,6 +88,7 @@ model User {
   email           String   @unique
   passwordHash    String
   fullName        String
+  phone           String?
   role            Role     @default(STUDENT)
   profileImage    String?  // Base64 encoded profile image
   isProfileComplete Boolean @default(false) // Student has completed profile
@@ -94,6 +105,7 @@ model User {
   manualGrades    ManualGrade[]
   attendance      Attendance[]
   faceVerifications FaceVerification[]
+  videoFaceVerifications VideoFaceVerification[]
   studentProfile  StudentProfile?
   courseSections  CourseSection[]  @relation("CourseSectionTeacher")
   enrollments     StudentEnrollment[]
@@ -101,6 +113,7 @@ model User {
   addDropRequests AddDropRequest[]  @relation("AddDropStudent")
   reviewedAddDrop AddDropRequest[] @relation("AddDropReviewer")
   notifications   Notification[]
+  auditLogs       AuditLog[]
   questionReports QuestionReport[]  @relation("StudentReports")
   reviewedReports QuestionReport[]  @relation("ReviewerReports")
   liveSessionAttendance LiveSessionAttendance[]
@@ -168,7 +181,7 @@ model StudentProfile {
   checkedInDate        DateTime?
   nationalExamResultTotal Int?
 
-  // === Educational - National Exam Results ===
+  // === Educational - National Exam Results (Natural Science) ===
   examEnglish         Int?
   examPhysics         Int?
   examCivics          Int?
@@ -176,6 +189,12 @@ model StudentProfile {
   examChemistry       Int?
   examBiology         Int?
   examAptitude        Int?
+
+  // === Educational - National Exam Results (Social Science) ===
+  examHistory         Int?
+  examEconomics       Int?
+  examGeography       Int?
+  examSocialMath      Int?
 
   // === Documents ===
   documents           StudentDocument[]
@@ -310,6 +329,7 @@ model Material {
   author User   @relation(fields: [createdBy], references: [id])
   views   MaterialView[]
   readingProgress MaterialReadingProgress[]
+  videoFaceVerifications VideoFaceVerification[]
 }
 
 model MaterialView {
@@ -377,6 +397,7 @@ model LiveSessionAttendance {
   joinedAt    DateTime
   leftAt      DateTime?
   duration    Int?     // minutes attended
+  faceAlerts  Int      @default(0) // number of face-not-detected alerts
   status      String   @default("JOINED") // JOINED, LEFT, ATTENDED, PARTIAL, ABSENT
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -420,17 +441,20 @@ model ManualAttendanceRecord {
 }
 
 model Assessment {
-  id           String       @id @default(cuid())
-  courseId     String
-  title        String
-  examType     ExamType     @default(QUIZ)
-  deliveryMode DeliveryMode @default(ONLINE)
-  timeLimit    Int?
-  maxScore     Int          @default(100) // Maximum score for this assessment
-  componentId  String?      // Link to grade component (auto-sets maxScore from weight)
-  isOpen       Boolean      @default(false) // Teacher must open for students to take
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
+  id             String       @id @default(cuid())
+  courseId       String
+  title          String
+  description    String?
+  examType       ExamType     @default(QUIZ)
+  deliveryMode   DeliveryMode @default(ONLINE)
+  timeLimit      Int?
+  maxScore       Int          @default(100) // Maximum score for this assessment
+  componentId    String?      // Link to grade component (auto-sets maxScore from weight)
+  isOpen         Boolean      @default(false) // Teacher must open for students to take
+  scheduledStart DateTime?    // When the assessment is scheduled to open
+  scheduledEnd   DateTime?    // When the assessment is scheduled to close
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 
   course       Course        @relation(fields: [courseId], references: [id])
   component    GradeComponent? @relation(fields: [componentId], references: [id])
@@ -499,15 +523,18 @@ model QuestionReport {
 }
 
 model Attempt {
-  id             String        @id @default(cuid())
-  assessmentId   String
-  studentId      String
-  status         AttemptStatus @default(IN_PROGRESS)
-  score          Int?
-  startedAt      DateTime      @default(now())
-  submittedAt    DateTime?
-  faceVerified   Boolean       @default(false) // Face matched during exam
-  faceVerifiedAt DateTime?     // When admin approved face match
+  id               String        @id @default(cuid())
+  assessmentId     String
+  studentId        String
+  status           AttemptStatus @default(IN_PROGRESS)
+  score            Int?
+  startedAt        DateTime      @default(now())
+  submittedAt      DateTime?
+  pausedAt         DateTime?               // When the exam was paused (disconnect)
+  remainingSeconds Int?                    // Seconds remaining when paused
+  currentQuestionIdx Int?     @default(0)  // Last question index the student was on
+  faceVerified     Boolean       @default(false) // Face matched during exam
+  faceVerifiedAt   DateTime?     // When admin approved face match
 
   assessment Assessment @relation(fields: [assessmentId], references: [id])
   student    User       @relation(fields: [studentId], references: [id])
@@ -533,6 +560,26 @@ model FaceVerification {
 
   attempt Attempt @relation(fields: [attemptId], references: [id])
   student User   @relation(fields: [studentId], references: [id])
+}
+
+// Face verification for video watching (tracked by teacher-uploaded videos)
+model VideoFaceVerification {
+  id              String   @id @default(cuid())
+  materialId      String   // The video material being watched
+  studentId       String
+  capturedImage   String   // Base64 encoded image captured during video
+  matchedImage    String?  // Reference to stored profile image
+  matchResult     Boolean  // False = face didn't match, needs admin review
+  adminReviewed   Boolean  @default(false)
+  adminApproved   Boolean  @default(false)
+  adminId         String?
+  reviewedAt      DateTime?
+  createdAt       DateTime @default(now())
+
+  material Material @relation(fields: [materialId], references: [id])
+  student  User     @relation(fields: [studentId], references: [id])
+
+  @@unique([materialId, studentId])
 }
 
 model Answer {
@@ -627,8 +674,12 @@ model Semester {
   addDropStart     DateTime?    // Start of add/drop period
   addDropEnd       DateTime?    // End of add/drop period
   // Official exam dates set by admin
-  midtermExamDate   DateTime?   // Official midterm exam date
-  finalExamDate     DateTime?   // Official final exam date
+  midtermExamDate   DateTime?   // Official midterm exam date (legacy)
+  finalExamDate     DateTime?   // Official final exam date (legacy)
+  midtermExamStart  DateTime?   // Start of midterm exam period
+  midtermExamEnd    DateTime?   // End of midterm exam period
+  finalExamStart    DateTime?   // Start of final exam period
+  finalExamEnd      DateTime?   // End of final exam period
   examPeriodStart   DateTime?
   examPeriodEnd     DateTime?
   gradingDeadline   DateTime?
@@ -671,6 +722,24 @@ model CourseSection {
   addDropRequests AddDropRequest[]
 
   @@unique([courseId, semesterId, sectionCode])
+  scheduleSlots CourseScheduleSlot[]
+}
+
+// Weekly schedule slots for a course section
+model CourseScheduleSlot {
+  id              String    @id @default(cuid())
+  courseSectionId String
+  dayOfWeek       DayOfWeek // MONDAY, TUESDAY, etc.
+  startTime       String    // "14:30" (24-hour format)
+  endTime         String    // "16:30" (24-hour format)
+  room            String?   // "XI-8", "HW Lab" - null for online
+  isOnline        Boolean   @default(false)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  courseSection   CourseSection @relation(fields: [courseSectionId], references: [id], onDelete: Cascade)
+
+  @@unique([courseSectionId, dayOfWeek, startTime])
 }
 
 // Student enrollment in a course section
@@ -724,6 +793,7 @@ model ExamSchedule {
   proposedDate    DateTime?
   duration        Int      // Duration in minutes
   location        String?  // Exam room/location
+  isOnline        Boolean  @default(false) // Online exam or physical
   instructions    String?
   weight          Int      @default(30) // Weight percentage for grade calculation
   // Early exam proposal status
@@ -864,3 +934,26 @@ model Certificate {
 
   @@index([studentId, departmentId])
 }
+
+// Audit Log for tracking system activity
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?  // User who performed the action (null for system)
+  userRole    String?  // Role of the user at time of action
+  action      String   // LOGIN, LOGOUT, CREATE, UPDATE, DELETE, ENROLL, GRADE_SUBMIT, etc.
+  category    String   // AUTH, USER, COURSE, ENROLLMENT, GRADE, SEMESTER, CLASS, etc.
+  targetId    String?  // ID of the affected entity
+  targetType  String?  // Model name: User, Course, Enrollment, etc.
+  description String   // Human-readable description
+  ipAddress   String?  // Request IP address
+  metadata    Json?    // Additional context (old values, new values, etc.)
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([action])
+  @@index([category])
+  @@index([createdAt])
+}
+

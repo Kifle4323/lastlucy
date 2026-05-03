@@ -710,23 +710,82 @@ def generate_html_output(conversion_result, material_id, user_id="student"):
     return html
 
 
+def convert_ppt_to_pptx(ppt_path):
+    """
+    Convert legacy .ppt file to .pptx using PowerPoint COM automation (Windows only).
+    Returns the path to the converted .pptx file.
+    """
+    import tempfile
+    import pythoncom
+    pythoncom.CoInitialize()
+
+    ppt_path = os.path.abspath(ppt_path)
+    pptx_path = os.path.join(tempfile.gettempdir(), os.path.splitext(os.path.basename(ppt_path))[0] + '_converted.pptx')
+
+    powerpoint = None
+    presentation = None
+    try:
+        import win32com.client
+        powerpoint = win32com.client.Dispatch('PowerPoint.Application')
+
+        # Open with ReadOnly=1, Untitled=1, WithWindow=0
+        presentation = powerpoint.Presentations.Open(ppt_path, True, True, False)
+        # SaveAs with ppSaveAsOpenXMLPresentation = 24
+        presentation.SaveAs(os.path.abspath(pptx_path), 24)
+        presentation.Close()
+        presentation = None
+        powerpoint.Quit()
+        powerpoint = None
+
+        return pptx_path
+    except ImportError:
+        raise RuntimeError('pywin32 is required for .ppt conversion. Install with: pip install pywin32')
+    except Exception as e:
+        if presentation:
+            try: presentation.Close()
+            except: pass
+        if powerpoint:
+            try: powerpoint.Quit()
+            except: pass
+        raise RuntimeError(f'PowerPoint COM conversion failed: {e}')
+    finally:
+        pythoncom.CoUninitialize()
+
+
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description='Convert PPTX to HTML with reading tracking')
-    parser.add_argument('input', help='Input PPTX file path')
+    parser = argparse.ArgumentParser(description='Convert PPTX/PPT to HTML with reading tracking')
+    parser.add_argument('input', help='Input PPTX/PPT file path')
     parser.add_argument('output', help='Output HTML file path')
     parser.add_argument('--material-id', default='', help='Material ID for tracking')
     
     args = parser.parse_args()
     
     try:
-        result = convert_pptx_to_html(args.input, args.material_id)
+        input_path = args.input
+        converted_pptx = None
+
+        # If it's a .ppt file, convert to .pptx first
+        if input_path.lower().endswith('.ppt') and not input_path.lower().endswith('.pptx'):
+            print(f"Converting legacy .ppt to .pptx via PowerPoint COM...")
+            converted_pptx = convert_ppt_to_pptx(input_path)
+            input_path = converted_pptx
+            print(f"Converted to: {converted_pptx}")
+
+        result = convert_pptx_to_html(input_path, args.material_id)
         html = generate_html_output(result, args.material_id)
         
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(html)
         
+        # Clean up converted temp file
+        if converted_pptx and os.path.exists(converted_pptx):
+            try:
+                os.unlink(converted_pptx)
+            except:
+                pass
+
         print(f"Converted {args.input} to {args.output}")
         print(f"{result['total_slides']} slides, {sum(s['required_time'] for s in result['slides_data'])/60:.1f} min reading time")
         

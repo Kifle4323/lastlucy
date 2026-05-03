@@ -108,6 +108,7 @@ export function registerCourseRoutes(router: Router) {
   // Get students enrolled in a course (Teacher only - for courses they teach)
   router.get('/courses/:courseId/students', authRequired, requireRole(['TEACHER']), async (req: AuthedRequest, res: Response) => {
     const params = z.object({ courseId: z.string() }).parse(req.params);
+    const query = z.object({ sectionId: z.string().optional() }).parse(req.query);
     const user = req.user!;
 
     // Verify teacher teaches this course
@@ -123,9 +124,20 @@ export function registerCourseRoutes(router: Router) {
       return;
     }
 
-    // Get students from course sections (via StudentEnrollment)
+    // Get current semester
+    const currentSemester = await prisma.semester.findFirst({
+      where: { isCurrent: true },
+    });
+
+    // If sectionId provided, fetch only that specific section's students
+    // Otherwise fetch all sections this teacher teaches for this course
     const courseSections = await prisma.courseSection.findMany({
-      where: { courseId: params.courseId },
+      where: {
+        courseId: params.courseId,
+        teacherId: user.id,
+        ...(query.sectionId ? { id: query.sectionId } : {}),
+        ...(currentSemester ? { semesterId: currentSemester.id } : {}),
+      },
       include: {
         enrollments: {
           where: { status: 'ENROLLED' },
@@ -135,23 +147,9 @@ export function registerCourseRoutes(router: Router) {
       },
     });
 
-    // Get students from course classes (via Class → students)
-    const courseClasses = await prisma.courseClass.findMany({
-      where: { courseId: params.courseId },
-      include: {
-        class: {
-          include: {
-            students: {
-              include: { student: { select: { id: true, fullName: true, email: true } } },
-            },
-          },
-        },
-      },
-    });
-
     type StudentWithClass = { id: string; fullName: string; email: string; classId: string | null; className: string | null };
 
-    // Students from course sections
+    // Students from course sections only (enrollment-based, not class-based)
     const sectionStudents: StudentWithClass[] = courseSections.flatMap(cs =>
       cs.enrollments.map(e => ({
         ...e.student,
@@ -160,27 +158,8 @@ export function registerCourseRoutes(router: Router) {
       }))
     );
 
-    // Students from course classes
-    type CourseClassWithStudents = {
-      classId: string;
-      class: {
-        id: string;
-        name: string;
-        students: { student: { id: string; fullName: string; email: string } }[];
-      };
-    };
-    const typedCourseClasses = courseClasses as CourseClassWithStudents[];
-    const classStudents: StudentWithClass[] = typedCourseClasses.flatMap(cc =>
-      cc.class.students.map(s => ({
-        ...s.student,
-        classId: cc.classId,
-        className: cc.class.name,
-      }))
-    );
-
-    // Merge and deduplicate
-    const allStudents = [...sectionStudents, ...classStudents];
-    const uniqueStudents = allStudents.reduce<StudentWithClass[]>((acc, student) => {
+    // Deduplicate
+    const uniqueStudents = sectionStudents.reduce<StudentWithClass[]>((acc, student) => {
       if (!acc.find(s => s.id === student.id)) {
         acc.push(student);
       }

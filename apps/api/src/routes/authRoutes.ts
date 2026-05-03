@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { prisma } from '../db';
 import { signAccessToken, signRefreshToken } from '../auth';
 import { authRequired, requireRole, type AuthedRequest } from '../middleware';
+import { createAuditLog } from '../auditLog';
 
 // Password validation: at least 1 uppercase, 1 lowercase, 1 number, min 6 chars
 const passwordSchema = z.string()
@@ -18,7 +19,7 @@ export function registerAuthRoutes(router: Router) {
   router.post('/auth/register', async (req: Request, res: Response) => {
     const body = z
       .object({
-        email: z.string().email(),
+        email: z.string().min(3).refine(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Invalid email'),
         password: passwordSchema,
         fullName: z.string().min(2),
         role: z.enum(['STUDENT', 'TEACHER']).optional(),
@@ -45,6 +46,7 @@ export function registerAuthRoutes(router: Router) {
       select: { id: true, email: true, fullName: true, role: true, isApproved: true, createdAt: true },
     });
 
+    createAuditLog({ userId: user.id, userRole: user.role, action: 'REGISTER', category: 'AUTH', targetId: user.id, targetType: 'User', description: `New ${user.role} registered: ${user.fullName} (${user.email})`, ipAddress: req.ip });
     res.json({ ...user, message: 'Account created successfully. Please wait for admin approval.' });
   });
 
@@ -52,7 +54,7 @@ export function registerAuthRoutes(router: Router) {
   router.post('/admin/users', authRequired, requireRole(['ADMIN']), async (req: AuthedRequest, res: Response) => {
     const body = z
       .object({
-        email: z.string().email(),
+        email: z.string().min(3).refine(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Invalid email'),
         password: passwordSchema,
         fullName: z.string().min(2),
         role: z.enum(['STUDENT', 'TEACHER', 'ADMIN']),
@@ -80,11 +82,12 @@ export function registerAuthRoutes(router: Router) {
       select: { id: true, email: true, fullName: true, role: true, isApproved: true, createdAt: true },
     });
 
+    createAuditLog({ userId: req.user!.id, userRole: 'ADMIN', action: 'CREATE', category: 'USER', targetId: user.id, targetType: 'User', description: `Admin created ${user.role} user: ${user.fullName} (${user.email})`, ipAddress: req.ip });
     res.json(user);
   });
 
   router.post('/auth/login', async (req: Request, res: Response) => {
-    const body = z.object({ email: z.string().email(), password: z.string().min(1) }).parse(req.body);
+    const body = z.object({ email: z.string().min(3).refine(v => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v), 'Invalid email'), password: z.string().min(1) }).parse(req.body);
 
     const user = await prisma.user.findUnique({ where: { email: body.email.toLowerCase() } });
     if (!user) {
@@ -94,6 +97,7 @@ export function registerAuthRoutes(router: Router) {
 
     const ok = await bcrypt.compare(body.password, user.passwordHash);
     if (!ok) {
+      createAuditLog({ action: 'LOGIN_FAILED', category: 'AUTH', targetId: user.id, targetType: 'User', description: `Failed login attempt for ${user.email}`, ipAddress: req.ip });
       res.status(401).json({ error: 'invalid_credentials' });
       return;
     }
@@ -108,6 +112,7 @@ export function registerAuthRoutes(router: Router) {
     const accessToken = signAccessToken(payload);
     const refreshToken = signRefreshToken(payload);
 
+    createAuditLog({ userId: user.id, userRole: user.role, action: 'LOGIN', category: 'AUTH', targetId: user.id, targetType: 'User', description: `${user.role} logged in: ${user.fullName} (${user.email})`, ipAddress: req.ip });
     res.json({
       accessToken,
       refreshToken,
@@ -135,6 +140,7 @@ export function registerAuthRoutes(router: Router) {
       select: { id: true, email: true, fullName: true, role: true, isApproved: true },
     });
 
+    createAuditLog({ userId: req.user!.id, userRole: 'ADMIN', action: 'APPROVE', category: 'USER', targetId: user.id, targetType: 'User', description: `Admin approved user: ${user.fullName} (${user.email})`, ipAddress: req.ip });
     res.json(user);
   });
 
@@ -142,10 +148,11 @@ export function registerAuthRoutes(router: Router) {
   router.delete('/admin/users/:userId', authRequired, requireRole(['ADMIN']), async (req: AuthedRequest, res: Response) => {
     const params = z.object({ userId: z.string() }).parse(req.params);
 
+    const targetUser = await prisma.user.findUnique({ where: { id: params.userId }, select: { fullName: true, email: true, role: true } });
     await prisma.user.delete({
       where: { id: params.userId },
     });
-
+    createAuditLog({ userId: req.user!.id, userRole: 'ADMIN', action: 'DELETE', category: 'USER', targetId: params.userId, targetType: 'User', description: `Admin deleted user: ${targetUser?.fullName || params.userId} (${targetUser?.email || ''})`, ipAddress: req.ip });
     res.json({ success: true });
   });
 

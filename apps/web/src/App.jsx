@@ -1,13 +1,17 @@
 import { useEffect } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from './AuthContext';
+import { useToast } from './ToastContext';
+import { api } from './api';
 import LoginPage from './pages/LoginPage';
 import RegisterPage from './pages/RegisterPage';
 import DashboardPage from './pages/DashboardPage';
+import LandingPage from './pages/LandingPage';
 import CoursePage from './pages/CoursePage';
 import AdminClassesPage from './pages/AdminClassesPage';
 import AdminUsersPage from './pages/AdminUsersPage';
 import AdminCoursesPage from './pages/AdminCoursesPage';
+import AdminLogsPage from './pages/AdminLogsPage';
 import AdminAcademicPage from './pages/AdminAcademicPage';
 import AdminDepartmentsPage from './pages/AdminDepartmentsPage';
 import MyClassesPage from './pages/MyClassesPage';
@@ -29,6 +33,9 @@ import TeacherQuestionReportsPage from './pages/TeacherQuestionReportsPage';
 import StudentMyReportsPage from './pages/StudentMyReportsPage';
 import CertificatePage from './pages/CertificatePage';
 import StudentPerformancePage from './pages/StudentPerformancePage';
+import WeeklySchedulePage from './pages/WeeklySchedulePage';
+import AdminResultsPage from './pages/AdminResultsPage';
+import TranscriptPage from './pages/TranscriptPage';
 
 function PrivateRoute({ children }) {
   const { user, loading } = useAuth();
@@ -46,9 +53,32 @@ function PrivateRoute({ children }) {
   return children;
 }
 
+function AdminRoute({ children }) {
+  const { user } = useAuth();
+  if (user?.role !== 'ADMIN') return <Navigate to="/dashboard" />;
+  return children;
+}
+
 export default function App() {
   const navigate = useNavigate();
   const { user, loading } = useAuth();
+  const toast = useToast();
+
+  // Global API error toast
+  useEffect(() => {
+    api.onError((err) => {
+      // Show validation and server errors as toast
+      if (err.details && Array.isArray(err.details)) {
+        err.details.forEach(d => {
+          const field = d.path?.join('.') || '';
+          toast.error(field ? `${field}: ${d.message}` : d.message);
+        });
+      } else {
+        toast.error(err.message);
+      }
+    });
+    return api.onError(null);
+  }, [toast]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center">Loading...</div>;
 
@@ -56,8 +86,9 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/" element={<LandingPage />} />
       <Route
-        path="/"
+        path="/dashboard"
         element={
           <PrivateRoute>
             <DashboardPage />
@@ -69,6 +100,14 @@ export default function App() {
         element={
           <PrivateRoute>
             <MyClassesPage />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/schedule"
+        element={
+          <PrivateRoute>
+            <WeeklySchedulePage />
           </PrivateRoute>
         }
       />
@@ -233,10 +272,26 @@ export default function App() {
         }
       />
       <Route
+        path="/admin/audit-logs"
+        element={
+          <PrivateRoute>
+            <AdminLogsPage />
+          </PrivateRoute>
+        }
+      />
+      <Route
         path="/admin/add-drop-requests"
         element={
           <PrivateRoute>
             <AdminAddDropRequestsPage />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/admin/results"
+        element={
+          <PrivateRoute>
+            <AdminResultsPage />
           </PrivateRoute>
         }
       />
@@ -257,6 +312,24 @@ export default function App() {
         }
       />
       <Route
+        path="/transcript"
+        element={
+          <PrivateRoute>
+            <TranscriptPage />
+          </PrivateRoute>
+        }
+      />
+      <Route
+        path="/admin/students/:studentId/transcript"
+        element={
+          <PrivateRoute>
+            <AdminRoute>
+              <TranscriptPage />
+            </AdminRoute>
+          </PrivateRoute>
+        }
+      />
+      <Route
         path="/certificates/:id"
         element={
           <PrivateRoute>
@@ -268,11 +341,13 @@ export default function App() {
         path="/performance"
         element={
           <PrivateRoute>
-            <StudentPerformancePage />
+            <AdminRoute>
+              <StudentPerformancePage />
+            </AdminRoute>
           </PrivateRoute>
         }
       />
-      <Route path="*" element={<Navigate to="/" />} />
+      <Route path="*" element={<Navigate to="/dashboard" />} />
     </Routes>
   );
 }

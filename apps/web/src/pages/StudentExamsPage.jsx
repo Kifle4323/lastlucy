@@ -113,12 +113,17 @@ export default function StudentExamsPage() {
                         <span className="text-gray-500 dark:text-gray-300">{t('exams.duration')}:</span>
                         <span className="font-medium text-gray-900 dark:text-gray-100">{exam.duration} {t('exams.minutes')}</span>
                       </div>
-                      {exam.location && (
+                      {exam.isOnline ? (
+                        <div className="flex items-center gap-2">
+                          <span className="text-gray-500 dark:text-gray-300">{t('exams.location')}:</span>
+                          <span className="font-medium text-purple-600 dark:text-purple-400">{t('grade.online')}</span>
+                        </div>
+                      ) : exam.location ? (
                         <div className="flex items-center gap-2">
                           <span className="text-gray-500 dark:text-gray-300">{t('exams.location')}:</span>
                           <span className="font-medium text-gray-900 dark:text-gray-100">{exam.location}</span>
                         </div>
-                      )}
+                      ) : null}
                     </div>
 
                     {exam.instructions && (

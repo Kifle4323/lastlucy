@@ -1,10 +1,10 @@
 import { useEffect, useState, useRef } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../AuthContext';
 import { useToast } from '../ToastContext';
 import { useConfirm } from '../ConfirmContext';
-import { getCourseAssessments, createAssessment, createQuestion, updateQuestion, deleteQuestion, getAssessmentQuestions, startAttempt, getAttempt, saveAnswer, submitAttempt, gradeAttempt, getCourseMaterials, createMaterial, deleteMaterial, getCourseStudents, toggleAssessmentOpen, updateAssessment, deleteAssessment, getManualGrades, setManualGrade, createFaceVerification, getProfileStatus, getAttemptsForGrading, getStudentAttempts, reportQuestion, recordMaterialView, closeMaterialView, getCourseMaterialStats, getGradeComponents, getMaterialHtml, saveReadingProgress, getReadingProgress, API_BASE } from '../api';
+import { getCourseAssessments, createAssessment, createQuestion, updateQuestion, deleteQuestion, getAssessmentQuestions, startAttempt, getAttempt, saveAnswer, submitAttempt, gradeAttempt, getCourseMaterials, createMaterial, deleteMaterial, getCourseStudents, toggleAssessmentOpen, updateAssessment, deleteAssessment, getManualGrades, setManualGrade, createFaceVerification, getProfileStatus, getAttemptsForGrading, getStudentAttempts, reportQuestion, recordMaterialView, closeMaterialView, getCourseMaterialStats, getGradeComponents, getMaterialHtml, saveReadingProgress, getReadingProgress, getVideoTrackingStats, pauseAttempt, autoSaveAttempt, API_BASE, getTeacherSections } from '../api';
 import Layout from '../components/Layout';
 import FaceTracker from '../components/FaceTracker';
 import {
@@ -37,11 +37,14 @@ import {
   Eye,
   BookOpen as ReadIcon,
   Maximize2,
-  Minimize2
+  Minimize2,
+  Video
 } from 'lucide-react';
 
 export default function CoursePage() {
   const { courseId } = useParams();
+  const [searchParams] = useSearchParams();
+  const sectionId = searchParams.get('sectionId');
   const { t } = useTranslation();
   const { user } = useAuth();
   const toast = useToast();
@@ -51,6 +54,8 @@ export default function CoursePage() {
   const [students, setStudents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('assessments');
+  const [teacherSections, setTeacherSections] = useState([]);
+  const [selectedSectionId, setSelectedSectionId] = useState(sectionId);
 
   // Teacher: create assessment form
   const [showCreateAssessment, setShowCreateAssessment] = useState(false);
@@ -65,6 +70,7 @@ export default function CoursePage() {
   const [showCreateMaterial, setShowCreateMaterial] = useState(false);
   const [newMaterial, setNewMaterial] = useState({ title: '', content: '', fileUrl: '', fileType: 'text', fileName: '' });
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [videoSource, setVideoSource] = useState('url'); // 'url' or 'upload'
   const [previewMaterial, setPreviewMaterial] = useState(null);
   const [currentViewId, setCurrentViewId] = useState(null);
   const [materialStats, setMaterialStats] = useState(null);
@@ -72,6 +78,10 @@ export default function CoursePage() {
   const [htmlContent, setHtmlContent] = useState(null); // Fetched HTML content
   const [htmlLoading, setHtmlLoading] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [videoFaceTracking, setVideoFaceTracking] = useState(false);
+  const [videoFaceMismatch, setVideoFaceMismatch] = useState(false);
+  const [videoTrackingData, setVideoTrackingData] = useState(null);
+  const [showVideoTracking, setShowVideoTracking] = useState(false);
 
   // Teacher: add question form
   const [selectedAssessment, setSelectedAssessment] = useState(null);
@@ -117,6 +127,9 @@ export default function CoursePage() {
   const [examSubmitted, setExamSubmitted] = useState(false); // prevent double submit
   const examSubmittedRef = useRef(false); // ref to avoid stale closure in timer
   const confirmingSubmitRef = useRef(false); // true while user is confirming manual submit
+  const [lastAutoSave, setLastAutoSave] = useState(null); // timestamp of last auto-save
+  const [autoSaveStatus, setAutoSaveStatus] = useState(''); // 'saving', 'saved', 'error'
+  const autoSaveIntervalRef = useRef(null);
 
   // Report question state
   const [showReportModal, setShowReportModal] = useState(false);
@@ -156,13 +169,23 @@ export default function CoursePage() {
     Promise.all([
       getCourseAssessments(courseId).then(setAssessments),
       getCourseMaterials(courseId).then(setMaterials),
-      user?.role === 'TEACHER' ? getCourseStudents(courseId).then(setStudents).catch((err) => console.error('Failed to load students:', err)) : Promise.resolve(),
+      user?.role === 'TEACHER' ? getTeacherSections().then(sections => {
+        const courseSections = sections.filter(s => s.courseId === courseId);
+        setTeacherSections(courseSections);
+        // If no sectionId selected, auto-select first section
+        if (!selectedSectionId && courseSections.length > 0) {
+          setSelectedSectionId(courseSections[0].id);
+        }
+        return courseSections;
+      }).catch(() => []) : Promise.resolve(),
+      // Only fetch students when we have a selectedSectionId
+      user?.role === 'TEACHER' && selectedSectionId ? getCourseStudents(courseId, selectedSectionId).then(setStudents).catch((err) => console.error('Failed to load students:', err)) : Promise.resolve(),
       user?.role === 'TEACHER' ? getCourseMaterialStats(courseId).then(setMaterialStats).catch(() => {}) : Promise.resolve(),
       user?.role === 'TEACHER' ? getGradeComponents(courseId).then(setGradeComponents).catch(() => {}) : Promise.resolve(),
       user?.role === 'STUDENT' ? getProfileStatus().then(status => setProfileImage(status.profileImage)).catch(() => {}) : Promise.resolve(),
       user?.role === 'STUDENT' ? getStudentAttempts(courseId).then(setStudentAttempts).catch(() => []) : Promise.resolve(),
     ]).finally(() => setLoading(false));
-  }, [courseId, user?.role]);
+  }, [courseId, selectedSectionId, user?.role]);
 
   // Fullscreen change listener
   useEffect(() => {
@@ -193,6 +216,215 @@ export default function CoursePage() {
 
     return () => clearInterval(timer);
   }, [timeRemaining]);
+
+  // Auto-save effect: save answers every 30 seconds during exam
+  useEffect(() => {
+    if (!activeAttempt || examSubmittedRef.current) {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+      return;
+    }
+
+    autoSaveIntervalRef.current = setInterval(async () => {
+      if (!activeAttempt || examSubmittedRef.current) return;
+      try {
+        setAutoSaveStatus('saving');
+        const answerEntries = Object.entries(answers).map(([questionId, value]) => {
+          const question = activeAttempt.assessment?.questions?.find(q => q.id === questionId);
+          if (!question) return null;
+          if (question.type === 'MCQ' || question.type === 'TRUE_FALSE') {
+            return { questionId, selected: value };
+          }
+          return { questionId, textAnswer: value };
+        }).filter(Boolean);
+
+        await autoSaveAttempt(
+          activeAttempt.id,
+          answerEntries,
+          timeRemaining ?? undefined,
+          currentQuestionIdx
+        );
+        setLastAutoSave(new Date());
+        setAutoSaveStatus('saved');
+      } catch (err) {
+        console.error('Auto-save failed:', err);
+        setAutoSaveStatus('error');
+      }
+    }, 5000); // every 5 seconds to ensure remainingSeconds is always saved
+
+    return () => {
+      if (autoSaveIntervalRef.current) {
+        clearInterval(autoSaveIntervalRef.current);
+        autoSaveIntervalRef.current = null;
+      }
+      // Pause exam when component unmounts (SPA navigation)
+      if (activeAttempt && !examSubmittedRef.current && timeRemaining != null) {
+        const answerEntries = Object.entries(answers).map(([questionId, value]) => {
+          const question = activeAttempt.assessment?.questions?.find(q => q.id === questionId);
+          if (!question) return null;
+          if (question.type === 'MCQ' || question.type === 'TRUE_FALSE') {
+            return { questionId, selected: value };
+          }
+          return { questionId, textAnswer: value };
+        }).filter(Boolean);
+
+        const payload = JSON.stringify({
+          remainingSeconds: timeRemaining ?? 0,
+          currentQuestionIdx,
+          answers: answerEntries,
+        });
+        fetch(`${API_BASE}/attempts/${activeAttempt.id}/pause`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+          },
+          body: payload,
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+  }, [activeAttempt, answers, timeRemaining, currentQuestionIdx]);
+
+  // Beforeunload: pause exam when page is closed/disconnected
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (!activeAttempt || examSubmittedRef.current) return;
+      // Build answers payload
+      const answerEntries = Object.entries(answers).map(([questionId, value]) => {
+        const question = activeAttempt.assessment?.questions?.find(q => q.id === questionId);
+        if (!question) return null;
+        if (question.type === 'MCQ' || question.type === 'TRUE_FALSE') {
+          return { questionId, selected: value };
+        }
+        return { questionId, textAnswer: value };
+      }).filter(Boolean);
+
+      const payload = JSON.stringify({
+        remainingSeconds: timeRemaining ?? 0,
+        currentQuestionIdx,
+        answers: answerEntries,
+      });
+      const url = `${API_BASE}/attempts/${activeAttempt.id}/pause`;
+
+      // fetch with keepalive supports headers and survives page unload
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('accessToken')}`,
+        },
+        body: payload,
+        keepalive: true,
+      }).catch(() => {});
+
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [activeAttempt, answers, timeRemaining, currentQuestionIdx]);
+
+  // Online/offline detection: pause when going offline
+  useEffect(() => {
+    const handleOffline = () => {
+      if (!activeAttempt || examSubmittedRef.current) return;
+      toast.warning(t('course.connectionLost'));
+    };
+
+    const handleOnline = () => {
+      if (!activeAttempt || examSubmittedRef.current) return;
+      toast.success(t('course.connectionRestored'));
+    };
+
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('online', handleOnline);
+    return () => {
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('online', handleOnline);
+    };
+  }, [activeAttempt]);
+
+  // Anti-cheat: disable copy/paste/right-click/select during exam
+  useEffect(() => {
+    if (!activeAttempt || examSubmittedRef.current) return;
+
+    const preventCopy = (e) => { e.preventDefault(); toast.warning(t('course.copyNotAllowed')); };
+    const preventCut = (e) => { e.preventDefault(); toast.warning(t('course.copyNotAllowed')); };
+    const preventPaste = (e) => { e.preventDefault(); toast.warning(t('course.pasteNotAllowed')); };
+    const preventContextMenu = (e) => { e.preventDefault(); };
+    const preventSelectStart = (e) => { e.preventDefault(); };
+    const preventKeyDown = (e) => {
+      // Block Ctrl+C, Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+P, Ctrl+S, F12
+      if ((e.ctrlKey || e.metaKey) && ['c','v','x','a','p','s'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+        if (['c','x'].includes(e.key.toLowerCase())) toast.warning(t('course.copyNotAllowed'));
+        if (e.key.toLowerCase() === 'v') toast.warning(t('course.pasteNotAllowed'));
+        if (e.key.toLowerCase() === 'p') toast.warning(t('course.printNotAllowed'));
+      }
+      if (e.key === 'F12') e.preventDefault();
+      // Block Ctrl+Shift+I, Ctrl+Shift+J, Ctrl+U (dev tools)
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && ['i','j','c'].includes(e.key.toLowerCase())) e.preventDefault();
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'u') e.preventDefault();
+    };
+
+    document.addEventListener('copy', preventCopy);
+    document.addEventListener('cut', preventCut);
+    document.addEventListener('paste', preventPaste);
+    document.addEventListener('contextmenu', preventContextMenu);
+    document.addEventListener('selectstart', preventSelectStart);
+    document.addEventListener('keydown', preventKeyDown);
+
+    return () => {
+      document.removeEventListener('copy', preventCopy);
+      document.removeEventListener('cut', preventCut);
+      document.removeEventListener('paste', preventPaste);
+      document.removeEventListener('contextmenu', preventContextMenu);
+      document.removeEventListener('selectstart', preventSelectStart);
+      document.removeEventListener('keydown', preventKeyDown);
+    };
+  }, [activeAttempt]);
+
+  // Anti-cheat: detect tab switch / window blur during exam
+  const tabSwitchCountRef = useRef(0);
+  useEffect(() => {
+    if (!activeAttempt || examSubmittedRef.current) return;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        tabSwitchCountRef.current += 1;
+        toast.error(t('course.tabSwitchWarning', { count: tabSwitchCountRef.current }));
+        // Auto-submit after 3 tab switches
+        if (tabSwitchCountRef.current >= 3) {
+          toast.error(t('course.tabSwitchAutoSubmit'));
+          handleSubmitAttempt(true);
+        }
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (!document.hidden) {
+        // Window lost focus but tab still visible (e.g., alt-tab to another window)
+        tabSwitchCountRef.current += 1;
+        toast.error(t('course.tabSwitchWarning', { count: tabSwitchCountRef.current }));
+        if (tabSwitchCountRef.current >= 3) {
+          toast.error(t('course.tabSwitchAutoSubmit'));
+          handleSubmitAttempt(true);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [activeAttempt]);
 
   // Format time for display
   const formatTime = (seconds) => {
@@ -228,6 +460,87 @@ export default function CoursePage() {
       const msg = err?.data?.message || err.message;
       toast.error(msg);
     }
+  };
+
+  // Check if an assessment can be activated based on exam schedule
+  const canActivateExam = (assessment) => {
+    if (assessment.isOpen) return true; // Can always deactivate
+    if (assessment.examType !== 'MIDTERM' && assessment.examType !== 'FINAL') return true; // No schedule restriction for quizzes/assignments
+
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    // Check scheduledStart on the assessment
+    if (assessment.scheduledStart && new Date(assessment.scheduledStart) > now) {
+      return false;
+    }
+
+    // 1. Check teacher's scheduled exam date (officialDate or confirmedDate)
+    if (assessment.examSchedule) {
+      const examDate = assessment.examSchedule.confirmedDate
+        ? new Date(assessment.examSchedule.confirmedDate)
+        : assessment.examSchedule.officialDate
+          ? new Date(assessment.examSchedule.officialDate)
+          : null;
+
+      if (examDate) {
+        const examDayStart = new Date(examDate);
+        examDayStart.setHours(0, 0, 0, 0);
+
+        if (examDayStart <= todayStart) {
+          // Teacher's exam date has arrived — allow activation
+          return true;
+        }
+
+        // Exam date hasn't arrived yet — check early exam proposal
+        const canEarly = assessment.examSchedule.earlyExamStatus === 'ALL_AGREED' || assessment.examSchedule.earlyExamStatus === 'APPROVED';
+        if (canEarly && assessment.examSchedule.proposedDate) {
+          const proposedDayStart = new Date(assessment.examSchedule.proposedDate);
+          proposedDayStart.setHours(0, 0, 0, 0);
+          return proposedDayStart <= todayStart;
+        }
+
+        return false; // Teacher's exam date hasn't arrived yet
+      }
+    }
+
+    // 2. No teacher schedule — fall back to admin's exam period range
+    const semester = assessment.semester;
+    let examPeriodStart = null;
+    let examPeriodEnd = null;
+
+    if (semester) {
+      if (assessment.examType === 'MIDTERM') {
+        examPeriodStart = semester.midtermExamStart ? new Date(semester.midtermExamStart) : null;
+        examPeriodEnd = semester.midtermExamEnd ? new Date(semester.midtermExamEnd) : null;
+        if (!examPeriodStart && semester.midtermExamDate) {
+          examPeriodStart = new Date(semester.midtermExamDate);
+          examPeriodEnd = new Date(semester.midtermExamDate);
+        }
+      } else {
+        examPeriodStart = semester.finalExamStart ? new Date(semester.finalExamStart) : null;
+        examPeriodEnd = semester.finalExamEnd ? new Date(semester.finalExamEnd) : null;
+        if (!examPeriodStart && semester.finalExamDate) {
+          examPeriodStart = new Date(semester.finalExamDate);
+          examPeriodEnd = new Date(semester.finalExamDate);
+        }
+      }
+    }
+
+    if (examPeriodStart && examPeriodEnd) {
+      const periodStart = new Date(examPeriodStart);
+      periodStart.setHours(0, 0, 0, 0);
+      const periodEnd = new Date(examPeriodEnd);
+      periodEnd.setHours(23, 59, 59, 999);
+
+      if (todayStart < periodStart) return false;
+      if (todayStart > periodEnd) return false;
+      return true; // Within admin period
+    }
+
+    // 3. No schedule at all
+    return false;
   };
 
   const handleDeleteAssessment = async (assessment) => {
@@ -436,9 +749,11 @@ export default function CoursePage() {
     const file = e.target.files[0];
     if (!file) return;
     
-    // Check file size (max 20MB)
-    if (file.size > 20 * 1024 * 1024) {
-      toast.warning(t('course.fileSizeLimit'));
+    // Check file size (max 20MB for docs, 200MB for videos)
+    const isVideo = file.type.startsWith('video/') || file.name.match(/\.(mp4|webm|ogg|mov|avi)$/i);
+    const maxSize = isVideo ? 200 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (file.size > maxSize) {
+      toast.warning(isVideo ? t('course.videoSizeLimit') : t('course.fileSizeLimit'));
       return;
     }
     
@@ -449,9 +764,11 @@ export default function CoursePage() {
         ...newMaterial,
         fileUrl: event.target.result,
         fileName: file.name,
-        fileType: file.name.toLowerCase().endsWith('.pdf') ? 'pdf' :
+        fileType: isVideo ? 'video' :
+                  file.name.toLowerCase().endsWith('.pdf') ? 'pdf' :
                   file.name.toLowerCase().endsWith('.doc') || file.name.toLowerCase().endsWith('.docx') ? 'doc' :
-                  file.name.toLowerCase().endsWith('.ppt') || file.name.toLowerCase().endsWith('.pptx') ? 'ppt' :
+                  file.name.toLowerCase().endsWith('.pptx') ? 'pptx' :
+                  file.name.toLowerCase().endsWith('.ppt') ? 'ppt' :
                   file.name.toLowerCase().endsWith('.xls') || file.name.toLowerCase().endsWith('.xlsx') ? 'xls' :
                   'file'
       });
@@ -466,6 +783,29 @@ export default function CoursePage() {
 
   const handleCreateMaterial = async (e) => {
     e.preventDefault();
+
+    // Validate: must have content based on type
+    const needsFile = ['pdf', 'doc', 'ppt', 'pptx', 'xls'].includes(newMaterial.fileType);
+    const needsUrl = newMaterial.fileType === 'link' || (newMaterial.fileType === 'video' && videoSource === 'url');
+    const needsContent = newMaterial.fileType === 'text';
+
+    if (needsFile && !newMaterial.fileUrl) {
+      toast.error('Please upload a file for this material type.');
+      return;
+    }
+    if (needsUrl && !newMaterial.fileUrl) {
+      toast.error('Please provide a URL for this material type.');
+      return;
+    }
+    if (needsContent && !newMaterial.content?.trim()) {
+      toast.error('Please enter content for this material type.');
+      return;
+    }
+    if (newMaterial.fileType === 'video' && videoSource === 'upload' && !newMaterial.fileUrl) {
+      toast.error('Please upload a video file.');
+      return;
+    }
+
     try {
       const material = await createMaterial(courseId, {
         title: newMaterial.title,
@@ -476,6 +816,7 @@ export default function CoursePage() {
       });
       setMaterials([...materials, material]);
       setNewMaterial({ title: '', content: '', fileUrl: '', fileType: 'text', fileName: '' });
+      setVideoSource('url');
       setShowCreateMaterial(false);
       toast.success(t('course.materialCreated'));
     } catch (err) {
@@ -497,8 +838,25 @@ export default function CoursePage() {
     toast.success(t('course.materialDeleted'));
   };
 
+  const handleShowVideoTracking = async (materialId) => {
+    try {
+      const stats = await getVideoTrackingStats(materialId);
+      setVideoTrackingData(stats);
+      setShowVideoTracking(true);
+    } catch (err) {
+      toast.error(t('course.failedLoadTracking'));
+    }
+  };
+
   const handleOpenPreview = async (material) => {
+    // PPTX/PPT/DOCX/DOC files: use HTML reader (converted via COM/python scripts)
+    if ((material.fileType === 'pptx' || material.fileType === 'ppt' || material.fileType === 'docx' || material.fileType === 'doc') && material.fileUrl) {
+      return handleOpenHtmlReader(material);
+    }
     setPreviewMaterial(material);
+    // Reset video face tracking
+    setVideoFaceTracking(false);
+    setVideoFaceMismatch(false);
     // Track student view
     if (user?.role === 'STUDENT') {
       try {
@@ -506,6 +864,16 @@ export default function CoursePage() {
         setCurrentViewId(result.viewId);
       } catch (err) {
         console.error('Failed to record view:', err);
+      }
+      // Enable face tracking for uploaded video materials (not YouTube/Vimeo links)
+      if (material.fileType === 'video' && material.fileUrl) {
+        const url = material.fileUrl;
+        const isYouTubeVimeo = url.match(/(?:youtube\.com|youtu\.be|vimeo\.com)/);
+        const isUploadedFile = url.startsWith('data:') || url.match(/\.(mp4|webm|ogg)$/i);
+        if (isUploadedFile || !isYouTubeVimeo) {
+          setVideoFaceTracking(true);
+          setVideoFaceMismatch(false);
+        }
       }
     }
   };
@@ -525,16 +893,32 @@ export default function CoursePage() {
       }
     }
     setCurrentViewId(null);
+    setVideoFaceTracking(false);
+    setVideoFaceMismatch(false);
     setPreviewMaterial(null);
   };
 
   // Open material with reading time tracking (all types)
   const handleOpenHtmlReader = async (material) => {
+    // PPT is now handled same as PPTX (converted via PowerPoint COM on Windows)
+    // No special case needed - falls through to HTML content fetch
     setHtmlReaderMaterial(material);
+    // Reset and enable video face tracking for uploaded videos
+    setVideoFaceTracking(false);
+    setVideoFaceMismatch(false);
+    if (user?.role === 'STUDENT' && material.fileType === 'video' && material.fileUrl) {
+      const url = material.fileUrl;
+      const isYouTubeVimeo = url.match(/(?:youtube\.com|youtu\.be|vimeo\.com)/);
+      const isUploadedFile = url.startsWith('data:') || url.match(/\.(mp4|webm|ogg)$/i);
+      if (isUploadedFile || !isYouTubeVimeo) {
+        setVideoFaceTracking(true);
+        setVideoFaceMismatch(false);
+      }
+    }
     setHtmlLoading(true);
     try {
-      // PPTX/PPT files have HTML content via conversion
-      if (material.htmlContent || material.fileType === 'pptx' || material.fileType === 'ppt') {
+      // PPTX/PPT/DOCX/DOC files have HTML content via conversion
+      if (material.htmlContent || material.fileType === 'pptx' || material.fileType === 'ppt' || material.fileType === 'docx' || material.fileType === 'doc') {
         const content = await getMaterialHtml(material.id);
         setHtmlContent(content);
       } else {
@@ -575,6 +959,8 @@ export default function CoursePage() {
       }
     }
     setCurrentViewId(null);
+    setVideoFaceTracking(false);
+    setVideoFaceMismatch(false);
     setHtmlReaderMaterial(null);
     setHtmlContent(null);
   };
@@ -599,6 +985,8 @@ export default function CoursePage() {
   const handleStartAttempt = async (assessmentId) => {
     try {
       const attempt = await startAttempt(assessmentId);
+      // startAttempt returns full attempt data when resuming, but minimal when new
+      // Always fetch full data with answers and questions
       const fullAttempt = await getAttempt(attempt.id);
       setActiveAttempt(fullAttempt);
       const initialAnswers = {};
@@ -606,18 +994,57 @@ export default function CoursePage() {
         initialAnswers[a.questionId] = a.selected || a.textAnswer || '';
       });
       setAnswers(initialAnswers);
-      // Reset quiz navigation state
-      setCurrentQuestionIdx(0);
+
+      // Check if resuming from a paused state (remainingSeconds was saved)
+      // Use attempt.remainingSeconds from startAttempt response (more reliable for resume)
+      const savedRemainingSeconds = attempt.remainingSeconds ?? fullAttempt.remainingSeconds;
+      const savedQuestionIdx = attempt.currentQuestionIdx ?? fullAttempt.currentQuestionIdx;
+      const isResuming = savedRemainingSeconds != null;
+      console.log('Exam resume check:', { 
+        attemptRemaining: attempt.remainingSeconds, 
+        fullRemaining: fullAttempt.remainingSeconds, 
+        savedRemainingSeconds, 
+        savedQuestionIdx, 
+        isResuming,
+        attemptPausedAt: attempt.pausedAt,
+        fullPausedAt: fullAttempt.pausedAt,
+      });
+
+      // Restore current question index
+      if (isResuming && savedQuestionIdx != null) {
+        setCurrentQuestionIdx(savedQuestionIdx);
+      } else {
+        setCurrentQuestionIdx(0);
+      }
       setSkippedQuestions(new Set());
-      // Initialize timer if timeLimit is set
-      if (fullAttempt.assessment?.timeLimit) {
-        setTimeRemaining(fullAttempt.assessment.timeLimit * 60); // convert minutes to seconds
+
+      // Initialize timer - restore remaining time or start from teacher's set time limit
+      if (isResuming && savedRemainingSeconds != null) {
+        // Resuming from pause — use saved remaining seconds
+        setTimeRemaining(savedRemainingSeconds);
+      } else if (fullAttempt.assessment?.timeLimit) {
+        // First time — use the time limit set by teacher when creating the assessment
+        setTimeRemaining(fullAttempt.assessment.timeLimit * 60);
+      } else if (fullAttempt.examEndTime) {
+        // Fallback — calculate from scheduled exam end time
+        const remaining = Math.floor((new Date(fullAttempt.examEndTime).getTime() - Date.now()) / 1000);
+        setTimeRemaining(Math.max(remaining, 0));
       } else {
         setTimeRemaining(null);
       }
+
+      // Show resume notification if applicable
+      if (isResuming) {
+        toast.info(t('course.examResumed'));
+      }
+
       // Start continuous face tracking
       setFaceTrackingActive(true);
       setFaceMismatchDetected(false);
+      setExamSubmitted(false);
+      examSubmittedRef.current = false;
+      setAutoSaveStatus('');
+      setLastAutoSave(null);
     } catch (err) {
       if (err.message?.includes('already_submitted')) {
         toast.warning(t('course.alreadySubmitted'));
@@ -648,6 +1075,8 @@ export default function CoursePage() {
     setTimeRemaining(null);
     setExamSubmitted(false);
     examSubmittedRef.current = false;
+    setActiveAttempt(null);
+    setAnswers({});
   };
 
   const handleSelectAnswer = async (questionId, selected) => {
@@ -904,13 +1333,28 @@ export default function CoursePage() {
                 <p className="text-gray-500 text-sm">{activeAttempt.assessment?.examType}</p>
               </div>
               {timeRemaining !== null && (
-                <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
-                  timeRemaining < 300 ? 'bg-red-100 text-red-700' : 
-                  timeRemaining < 600 ? 'bg-yellow-100 text-yellow-700' : 
-                  'bg-gray-100 text-gray-700'
-                }`}>
-                  <Clock className="w-5 h-5" />
-                  <span className="font-mono text-lg font-bold">{formatTime(timeRemaining)}</span>
+                <div className="flex items-center gap-3">
+                  <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
+                    timeRemaining < 300 ? 'bg-red-100 text-red-700' : 
+                    timeRemaining < 600 ? 'bg-yellow-100 text-yellow-700' : 
+                    'bg-gray-100 text-gray-700'
+                  }`}>
+                    <Clock className="w-5 h-5" />
+                    <span className="font-mono text-lg font-bold">{formatTime(timeRemaining)}</span>
+                  </div>
+                  {/* Auto-save indicator */}
+                  {autoSaveStatus && (
+                    <div className={`flex items-center gap-1 text-xs px-2 py-1 rounded ${
+                      autoSaveStatus === 'saved' ? 'text-green-600 bg-green-50' :
+                      autoSaveStatus === 'saving' ? 'text-blue-600 bg-blue-50' :
+                      'text-red-600 bg-red-50'
+                    }`}>
+                      {autoSaveStatus === 'saving' && <span className="animate-pulse">●</span>}
+                      {autoSaveStatus === 'saved' && <CheckCircle className="w-3 h-3" />}
+                      {autoSaveStatus === 'error' && <AlertCircle className="w-3 h-3" />}
+                      <span>{autoSaveStatus === 'saving' ? t('course.saving') : autoSaveStatus === 'saved' ? t('course.saved') : t('course.saveFailed')}</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1082,13 +1526,26 @@ export default function CoursePage() {
                     <span className="font-medium">{skippedCount}</span> {t('course.skipped')}, {' '}
                     <span className="font-medium">{unansweredCount}</span> {t('course.remaining')}
                   </div>
+                  {tabSwitchCountRef.current > 0 && (
+                    <span className="text-xs text-red-600 font-medium">
+                      ⚠ {t('course.tabSwitchWarning', { count: tabSwitchCountRef.current })}
+                    </span>
+                  )}
                   <button
-                    onClick={() => { 
-                      setActiveAttempt(null); 
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: t('course.exitExam'),
+                        message: t('course.exitExamConfirm'),
+                        confirmText: t('course.exitExam'),
+                        cancelText: t('common.cancel'),
+                        type: 'danger',
+                      });
+                      if (!confirmed) return;
+                      setActiveAttempt(null);
                       setAnswers({});
                       handleEndExam();
                     }}
-                    className="px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-lg text-sm"
+                    className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 font-medium rounded-lg text-sm"
                   >
                     {t('course.exitExam')}
                   </button>
@@ -1195,6 +1652,7 @@ export default function CoursePage() {
                       <option value="pdf">{t('course.pdfDocument')}</option>
                       <option value="doc">{t('course.wordDocument')}</option>
                       <option value="ppt">{t('course.powerPoint')}</option>
+                      <option value="pptx">{t('course.powerPoint')} (.pptx)</option>
                       <option value="xls">{t('course.excelSpreadsheet')}</option>
                       <option value="video">{t('course.video')}</option>
                     </select>
@@ -1226,18 +1684,66 @@ export default function CoursePage() {
                   )}
                   {newMaterial.fileType === 'video' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.videoUrl')}</label>
-                      <input
-                        type="url"
-                        value={newMaterial.fileUrl}
-                        onChange={(e) => setNewMaterial({ ...newMaterial, fileUrl: e.target.value })}
-                        required
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                        placeholder="https://youtube.com/... or https://vimeo.com/..."
-                      />
+                      <div className="flex gap-2 mb-3">
+                        <button
+                          type="button"
+                          onClick={() => { setVideoSource('url'); setNewMaterial({ ...newMaterial, fileUrl: '', fileName: '' }); }}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg ${videoSource === 'url' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                        >
+                          {t('course.videoUrl')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { setVideoSource('upload'); setNewMaterial({ ...newMaterial, fileUrl: '', fileName: '' }); }}
+                          className={`px-3 py-1.5 text-sm font-medium rounded-lg ${videoSource === 'upload' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-700'}`}
+                        >
+                          {t('course.uploadVideo')}
+                        </button>
+                      </div>
+                      {videoSource === 'url' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.url')}</label>
+                          <input
+                            type="url"
+                            value={newMaterial.fileUrl}
+                            onChange={(e) => setNewMaterial({ ...newMaterial, fileUrl: e.target.value })}
+                            required
+                            className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
+                            placeholder="https://youtube.com/... or https://vimeo.com/..."
+                          />
+                        </div>
+                      )}
+                      {videoSource === 'upload' && (
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.uploadVideoFile')}</label>
+                          <div className="flex gap-3">
+                            <label className="flex-1 px-4 py-8 border-2 border-dashed border-gray-300 rounded-lg hover:border-primary-500 cursor-pointer flex flex-col items-center justify-center gap-2 transition-colors">
+                              <Upload className="w-8 h-8 text-gray-400" />
+                              <span className="text-sm text-gray-600">
+                                {uploadingFile ? t('course.uploading') : newMaterial.fileName ? `${t('course.selected')}: ${newMaterial.fileName}` : t('course.clickToUploadVideo')}
+                              </span>
+                              <span className="text-xs text-gray-400">{t('course.videoFormatsNote')}</span>
+                              <input
+                                type="file"
+                                accept="video/mp4,video/webm,video/ogg,.mp4,.webm,.ogg,.mov,.avi"
+                                onChange={handleMaterialFileUpload}
+                                className="hidden"
+                                disabled={uploadingFile}
+                              />
+                            </label>
+                            {newMaterial.fileUrl && videoSource === 'upload' && (
+                              <div className="flex-1">
+                                <video controls className="w-full rounded-lg max-h-32">
+                                  <source src={newMaterial.fileUrl} />
+                                </video>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
-                  {(newMaterial.fileType === 'pdf' || newMaterial.fileType === 'doc' || newMaterial.fileType === 'ppt' || newMaterial.fileType === 'xls') && (
+                  {(newMaterial.fileType === 'pdf' || newMaterial.fileType === 'doc' || newMaterial.fileType === 'ppt' || newMaterial.fileType === 'pptx' || newMaterial.fileType === 'xls') && (
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.uploadFile')}</label>
                       <div className="flex gap-3">
@@ -1248,7 +1754,7 @@ export default function CoursePage() {
                           </span>
                           <input
                             type="file"
-                            accept={newMaterial.fileType === 'pdf' ? '.pdf' : newMaterial.fileType === 'doc' ? '.doc,.docx' : newMaterial.fileType === 'ppt' ? '.ppt,.pptx' : '.xls,.xlsx'}
+                            accept={newMaterial.fileType === 'pdf' ? '.pdf' : newMaterial.fileType === 'doc' ? '.doc,.docx' : newMaterial.fileType === 'pptx' ? '.pptx' : newMaterial.fileType === 'ppt' ? '.ppt' : '.xls,.xlsx'}
                             onChange={handleMaterialFileUpload}
                             className="hidden"
                             disabled={uploadingFile}
@@ -1324,7 +1830,13 @@ export default function CoursePage() {
                       <span className="inline-block mt-2 px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">
                         {m.fileType}
                       </span>
-                      {user?.role === 'TEACHER' && materialStats && (() => {
+                      {m.fileType === 'video' && m.fileUrl && !m.fileUrl.match(/(?:youtube\.com|youtu\.be|vimeo\.com)/) && (
+                        <span className="inline-block mt-2 ml-2 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">
+                          <Video className="w-3 h-3 inline mr-1" />
+                          {t('course.tracked')}
+                        </span>
+                      )}
+                      {user?.role === 'TEACHER' && Array.isArray(materialStats) && (() => {
                         const stat = materialStats.find(s => s.materialId === m.id);
                         if (!stat) return null;
                         return (
@@ -1348,6 +1860,16 @@ export default function CoursePage() {
                           >
                             <Eye className="w-4 h-4" />
                             {t('course.preview')}
+                          </button>
+                        )}
+                        {/* Video Tracking button for teachers on tracked videos */}
+                        {user?.role === 'TEACHER' && m.fileType === 'video' && m.fileUrl && !m.fileUrl.match(/(?:youtube\.com|youtu\.be|vimeo\.com)/) && (
+                          <button
+                            onClick={() => handleShowVideoTracking(m.id)}
+                            className="inline-flex items-center gap-2 text-sm text-green-600 hover:text-green-700 font-medium"
+                          >
+                            <Video className="w-4 h-4" />
+                            {t('course.tracking')}
                           </button>
                         )}
                         {/* Read with Tracking button for all materials (students) */}
@@ -1435,35 +1957,30 @@ export default function CoursePage() {
                   </div>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.type')}</label>
-                      <select
-                        value={newAssessment.examType}
-                        onChange={(e) => setNewAssessment({ ...newAssessment, examType: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
-                      >
-                        <option value="QUIZ">{t('course.quiz')}</option>
-                        <option value="ASSIGNMENT">{t('course.assignment')}</option>
-                        <option value="MIDTERM">{t('course.midterm')}</option>
-                        <option value="FINAL">{t('course.final')}</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.gradeComponent')}</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.gradeComponents')}</label>
                       <select
                         value={newAssessment.componentId}
                         onChange={(e) => {
                           const compId = e.target.value;
                           const comp = gradeComponents.find(c => c.id === compId);
+                          // Auto-derive examType from component name
+                          const nameToExamType = {
+                            'Quiz': 'QUIZ', 'Assignment': 'ASSIGNMENT', 'Midterm': 'MIDTERM',
+                            'Final': 'FINAL', 'Class Activity': 'CLASS_ACTIVITY',
+                            'Project': 'PROJECT', 'Presentation': 'PRESENTATION',
+                          };
+                          const derivedExamType = comp ? (nameToExamType[comp.name] || comp.name.toUpperCase().replace(/\s+/g, '_')) : 'QUIZ';
                           setNewAssessment({
                             ...newAssessment,
                             componentId: compId,
+                            examType: derivedExamType,
                             maxScore: comp ? String(comp.weight) : newAssessment.maxScore,
                           });
                         }}
                         className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
                       >
-                        <option value="">{t('course.none')}</option>
-                        {gradeComponents.filter(c => c.name !== 'Attendance').map(comp => (
+                        <option value="">{t('course.none')} (Quiz)</option>
+                        {gradeComponents.filter(c => c.name !== 'Attendance' && !assessments.some(a => a.componentId === c.id)).map(comp => (
                           <option key={comp.id} value={comp.id}>{comp.name} ({comp.weight}%)</option>
                         ))}
                       </select>
@@ -1478,20 +1995,24 @@ export default function CoursePage() {
                         className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent bg-white"
                       >
                         <option value="ONLINE">{t('course.online')}</option>
+                        <option value="ONLINE_EXAM">{t('course.onlineExam')}</option>
                         <option value="PAPER">{t('course.paper')}</option>
                       </select>
                     </div>
+                    {newAssessment.deliveryMode !== 'PAPER' && (
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.timeLimitMin')}</label>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.timeLimitMin')} {newAssessment.deliveryMode === 'ONLINE_EXAM' && <span className="text-red-500">*</span>}</label>
                       <input
                         type="number"
                         min="1"
                         value={newAssessment.timeLimit}
                         onChange={(e) => setNewAssessment({ ...newAssessment, timeLimit: e.target.value })}
+                        required={newAssessment.deliveryMode === 'ONLINE_EXAM'}
                         className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-                        placeholder={t('course.optional')}
+                        placeholder={newAssessment.deliveryMode === 'ONLINE_EXAM' ? t('course.required') : t('course.optional')}
                       />
                     </div>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">{t('course.maxScore')} {newAssessment.componentId && <span className="text-gray-400">({t('course.autoSetFromComponent')})</span>}</label>
@@ -1549,13 +2070,13 @@ export default function CoursePage() {
                               a.examType === 'MIDTERM' ? 'bg-yellow-50 text-yellow-700' :
                               'bg-red-50 text-red-700'
                             }`}>
-                              {a.examType}
+                              {a.examType === 'QUIZ' ? t('course.quiz') : a.examType === 'ASSIGNMENT' ? t('course.assignment') : a.examType === 'MIDTERM' ? t('course.midterm') : a.examType === 'FINAL' ? t('course.final') : a.examType === 'CLASS_ACTIVITY' ? t('course.classActivity') : a.examType === 'LAB' ? t('course.lab') : a.examType === 'PROJECT' ? t('course.project') : a.examType === 'PRESENTATION' ? t('course.presentation') : a.examType}
                             </span>
                             <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${
-                              a.deliveryMode === 'ONLINE' ? 'bg-purple-50 text-purple-700' :
+                              a.deliveryMode === 'ONLINE' || a.deliveryMode === 'ONLINE_EXAM' ? 'bg-purple-50 text-purple-700' :
                               'bg-orange-50 text-orange-700'
                             }`}>
-                              {a.deliveryMode || 'ONLINE'}
+                              {a.deliveryMode === 'ONLINE_EXAM' ? t('course.onlineExam') : a.deliveryMode === 'PAPER' ? t('course.paper') : t('course.online')}
                             </span>
                             <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded ${
                               a.isOpen ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'
@@ -1643,17 +2164,36 @@ export default function CoursePage() {
                     <div className="p-5">
                       {user?.role === 'TEACHER' && (
                         <div className="space-y-2">
+                          {a.deliveryMode !== 'PAPER' && a.deliveryMode !== 'MIXED' && (
+                          <>
                           <button
                             onClick={() => handleToggleAssessment(a.id, !a.isOpen)}
+                            disabled={!a.isOpen && !canActivateExam(a)}
                             className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
                               a.isOpen 
                                 ? 'bg-red-50 hover:bg-red-100 text-red-700' 
-                                : 'bg-green-600 hover:bg-green-700 text-white'
+                                : !canActivateExam(a)
+                                  ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                  : 'bg-green-600 hover:bg-green-700 text-white'
                             }`}
                           >
                             {a.isOpen ? <Lock className="w-4 h-4" /> : <Unlock className="w-4 h-4" />}
-                            {a.isOpen ? t('course.deactivate') : t('course.activate')}
+                            {a.isOpen ? t('course.deactivate') : !canActivateExam(a) ? t('course.notScheduledYet') : t('course.activate')}
                           </button>
+                          {!a.isOpen && !canActivateExam(a) && (
+                            <p className="text-xs text-gray-500 text-center">
+                              {a.scheduledStart
+                                ? `${t('course.opensAt')} ${new Date(a.scheduledStart).toLocaleString()}`
+                                : a.examSchedule?.officialDate || a.examSchedule?.confirmedDate
+                                  ? `${t('course.examScheduledFor')} ${new Date(a.examSchedule.confirmedDate || a.examSchedule.officialDate).toLocaleString()} (${t('course.examPeriod')} ${a.examType === 'MIDTERM' && a.semester?.midtermExamStart ? `${new Date(a.semester.midtermExamStart).toLocaleDateString()} - ${new Date(a.semester.midtermExamEnd).toLocaleDateString()}` : a.examType === 'FINAL' && a.semester?.finalExamStart ? `${new Date(a.semester.finalExamStart).toLocaleDateString()} - ${new Date(a.semester.finalExamEnd).toLocaleDateString()}` : ''})`
+                                  : !a.examSchedule
+                                    ? t('course.noExamSchedule')
+                                    : t('course.examDateNotArrived')}
+                            </p>
+                          )}
+                          </>
+                          )}
+                          {a.deliveryMode !== 'PAPER' && a.deliveryMode !== 'MIXED' && (
                           <button
                             onClick={() => handleViewSubmissions(a)}
                             className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 font-medium rounded-lg transition-colors"
@@ -1661,13 +2201,19 @@ export default function CoursePage() {
                             <Users className="w-4 h-4" />
                             {t('course.viewSubmissions')}
                           </button>
+                          )}
                           <button
                             onClick={() => handleOpenGradeModal(a)}
-                            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 font-medium rounded-lg transition-colors"
+                            className={`w-full inline-flex items-center justify-center gap-2 px-4 py-2 font-medium rounded-lg transition-colors ${
+                              a.deliveryMode === 'PAPER' || a.deliveryMode === 'MIXED'
+                                ? 'bg-primary-900 hover:bg-primary-800 text-white'
+                                : 'bg-blue-50 hover:bg-blue-100 text-blue-700'
+                            }`}
                           >
                             <Edit3 className="w-4 h-4" />
                             {t('course.enterGrades')}
                           </button>
+                          {a.deliveryMode !== 'PAPER' && a.deliveryMode !== 'MIXED' && (
                           <button
                             onClick={() => toggleQuestionPanel(a)}
                             className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-primary-50 hover:bg-primary-100 text-primary-700 font-medium rounded-lg transition-colors"
@@ -1675,6 +2221,7 @@ export default function CoursePage() {
                             <Plus className="w-4 h-4" />
                             {selectedAssessment?.id === a.id ? t('course.close') : t('course.addQuestions')}
                           </button>
+                          )}
                           <div className="flex gap-2">
                             <button
                               onClick={() => startEditAssessment(a)}
@@ -1697,12 +2244,22 @@ export default function CoursePage() {
                         (() => {
                           const rejectedAttempt = studentAttempts.find(att => att.assessmentId === a.id && att.status === 'REJECTED');
                           const existingAttempt = studentAttempts.find(att => att.assessmentId === a.id && (att.status === 'SUBMITTED' || att.status === 'GRADED'));
+                          const isPaper = a.deliveryMode === 'PAPER' || a.deliveryMode === 'MIXED';
                           return rejectedAttempt ? (
                             <div className="space-y-2">
                               <div className="flex items-center justify-between p-3 bg-red-50 rounded-lg">
                                 <div className="flex items-center gap-2 text-red-700">
                                   <AlertTriangle className="w-4 h-4" />
                                   <span className="text-sm font-medium">{t('course.rejectedFaceVerification')}</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : isPaper && !existingAttempt ? (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between p-3 bg-orange-50 rounded-lg">
+                                <div className="flex items-center gap-2 text-orange-700">
+                                  <FileText className="w-4 h-4" />
+                                  <span className="text-sm font-medium">{t('course.paperExamInfo')}</span>
                                 </div>
                               </div>
                             </div>
@@ -1913,7 +2470,22 @@ export default function CoursePage() {
         {/* Students Tab (Teacher only) */}
         {activeTab === 'students' && user?.role === 'TEACHER' && (
           <>
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">{t('course.enrolledStudents')}</h2>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-gray-900">{t('course.enrolledStudents')}</h2>
+              {teacherSections.length > 1 && (
+                <select
+                  value={selectedSectionId || ''}
+                  onChange={e => setSelectedSectionId(e.target.value)}
+                  className="border border-gray-300 dark:border-gray-600 rounded px-3 py-1.5 text-sm bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                >
+                  {teacherSections.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.sectionCode} - {s.class?.name || s.semester?.name || 'No class'}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
             {students.length === 0 ? (
               <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-12 text-center">
                 <Users className="w-12 h-12 text-gray-300 mx-auto mb-4" />
@@ -2252,6 +2824,28 @@ export default function CoursePage() {
       {/* Material Preview Modal */}
       {previewMaterial && (
         <div id="preview-modal" className={`${isFullscreen ? '' : 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4'}`}>
+          {/* Video Face Tracking for students watching uploaded videos */}
+          {videoFaceTracking && user?.role === 'STUDENT' && (
+            <FaceTracker
+              active={videoFaceTracking}
+              materialId={previewMaterial.id}
+              profileImage={profileImage}
+              onMismatch={() => setVideoFaceMismatch(true)}
+              intervalMs={60000}
+            />
+          )}
+          {/* Video Face Mismatch Warning */}
+          {videoFaceMismatch && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70] bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg shadow-lg max-w-md">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+                <div>
+                  <p className="font-medium text-yellow-800">{t('course.faceVerificationAlert')}</p>
+                  <p className="text-sm text-yellow-700">{t('course.videoFaceMismatchDetected')}</p>
+                </div>
+              </div>
+            </div>
+          )}
           <div className={`bg-white dark:bg-gray-800 ${isFullscreen ? 'w-full h-full' : 'rounded-xl shadow-2xl w-full max-w-5xl max-h-[90vh]'} flex flex-col`}>
             {/* Header */}
             <div className={`flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 ${isFullscreen ? 'hidden' : ''}`}>
@@ -2359,10 +2953,10 @@ export default function CoursePage() {
                         </div>
                       );
                     }
-                    // Direct video URL (mp4, webm, etc.)
-                    if (url.match(/\.(mp4|webm|ogg)$/i)) {
+                    // Direct video URL (mp4, webm, etc.) or uploaded base64 data URL
+                    if (url.match(/\.(mp4|webm|ogg)$/i) || url.startsWith('data:video/')) {
                       return (
-                        <video controls className="w-full rounded-lg max-h-[70vh]">
+                        <video controls className="w-full rounded-lg max-h-[70vh]" autoPlay>
                           <source src={url} />
                           Your browser does not support the video tag.
                         </video>
@@ -2395,8 +2989,8 @@ export default function CoursePage() {
                 </div>
               )}
 
-              {/* PPT / DOC / XLS - Converted to PDF and displayed inline via /preview endpoint */}
-              {(previewMaterial.fileType === 'ppt' || previewMaterial.fileType === 'doc' || previewMaterial.fileType === 'xls' || previewMaterial.fileType === 'pptx' || previewMaterial.fileType === 'docx' || previewMaterial.fileType === 'xlsx') && previewMaterial.fileUrl && (
+              {/* XLS / XLSX - Converted to PDF and displayed inline via /preview endpoint */}
+              {(previewMaterial.fileType === 'xls' || previewMaterial.fileType === 'xlsx') && previewMaterial.fileUrl && (
                 <div className="w-full" style={{ height: '75vh' }}>
                   <iframe
                     src={`${API_BASE}/materials/${previewMaterial.id}/preview`}
@@ -2470,6 +3064,28 @@ export default function CoursePage() {
       {/* HTML Reader Modal - supports all material types with tracking */}
       {htmlReaderMaterial && (
         <div id="html-reader-modal" className={`${isFullscreen ? '' : 'fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-2'}`}>
+          {/* Video Face Tracking for students watching uploaded videos */}
+          {videoFaceTracking && user?.role === 'STUDENT' && (
+            <FaceTracker
+              active={videoFaceTracking}
+              materialId={htmlReaderMaterial.id}
+              profileImage={profileImage}
+              onMismatch={() => setVideoFaceMismatch(true)}
+              intervalMs={60000}
+            />
+          )}
+          {/* Video Face Mismatch Warning */}
+          {videoFaceMismatch && (
+            <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[70] bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r-lg shadow-lg max-w-md">
+              <div className="flex items-center gap-3">
+                <AlertCircle className="w-5 h-5 text-yellow-600" />
+                <div>
+                  <p className="font-medium text-yellow-800">{t('course.faceVerificationAlert')}</p>
+                  <p className="text-sm text-yellow-700">{t('course.videoFaceMismatchDetected')}</p>
+                </div>
+              </div>
+            </div>
+          )}
           <div className={`bg-white dark:bg-gray-800 ${isFullscreen ? 'w-full h-full' : 'rounded-xl shadow-2xl w-full h-full max-w-[95vw]'} flex flex-col`}>
             {/* Header - hidden in fullscreen */}
             <div className={`flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700 ${isFullscreen ? 'hidden' : ''}`}>
@@ -2552,8 +3168,8 @@ export default function CoursePage() {
                   style={{ height: isFullscreen ? '100vh' : 'calc(100vh - 140px)' }}
                   title={htmlReaderMaterial.title}
                 />
-              ) : (htmlReaderMaterial.fileType === 'ppt' || htmlReaderMaterial.fileType === 'doc' || htmlReaderMaterial.fileType === 'xls' || htmlReaderMaterial.fileType === 'pptx' || htmlReaderMaterial.fileType === 'docx' || htmlReaderMaterial.fileType === 'xlsx') && htmlReaderMaterial.fileUrl ? (
-                /* Office docs via preview endpoint */
+              ) : (htmlReaderMaterial.fileType === 'xls' || htmlReaderMaterial.fileType === 'xlsx') && htmlReaderMaterial.fileUrl ? (
+                /* Excel via preview endpoint */
                 <iframe
                   src={`${API_BASE}/materials/${htmlReaderMaterial.id}/preview`}
                   className="w-full h-full border-0"
@@ -2573,8 +3189,8 @@ export default function CoursePage() {
                     if (vimeoMatch) {
                       return <iframe className="w-full h-full" src={`https://player.vimeo.com/video/${vimeoMatch[1]}`} title={htmlReaderMaterial.title} frameBorder="0" allow="autoplay; fullscreen" allowFullScreen />;
                     }
-                    if (url.match(/\.(mp4|webm|ogg)$/i)) {
-                      return <video controls className="w-full h-full"><source src={url} />Your browser does not support the video tag.</video>;
+                    if (url.match(/\.(mp4|webm|ogg)$/i) || url.startsWith('data:video/')) {
+                      return <video controls className="w-full h-full" autoPlay><source src={url} />Your browser does not support the video tag.</video>;
                     }
                     return <iframe className="w-full h-full" src={url} title={htmlReaderMaterial.title} allowFullScreen />;
                   })()}
@@ -2614,6 +3230,101 @@ export default function CoursePage() {
                 className="px-4 py-2 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 font-medium rounded-lg text-sm"
               >
                 {t('course.closeReader')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Video Tracking Stats Modal */}
+      {showVideoTracking && videoTrackingData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center gap-3">
+                <Video className="w-5 h-5 text-green-500" />
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">{videoTrackingData.materialTitle}</h2>
+                <span className="px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded">{t('course.tracked')}</span>
+              </div>
+              <button onClick={() => { setShowVideoTracking(false); setVideoTrackingData(null); }} className="p-1 hover:bg-gray-100 rounded"><X className="w-5 h-5" /></button>
+            </div>
+
+            {/* Summary Stats */}
+            <div className="grid grid-cols-4 gap-4 p-4 border-b border-gray-200 dark:border-gray-700">
+              <div className="text-center">
+                <p className="text-2xl font-bold text-blue-600">{videoTrackingData.viewCount}/{videoTrackingData.totalStudents}</p>
+                <p className="text-xs text-gray-500">{t('course.studentsViewed')}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-green-600">{videoTrackingData.viewPercent}%</p>
+                <p className="text-xs text-gray-500">{t('course.viewPercent')}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-emerald-600">{videoTrackingData.faceMatched}</p>
+                <p className="text-xs text-gray-500">{t('course.faceMatched')}</p>
+              </div>
+              <div className="text-center">
+                <p className="text-2xl font-bold text-red-600">{videoTrackingData.faceMismatched}</p>
+                <p className="text-xs text-gray-500">{t('course.faceMismatched')}</p>
+              </div>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="px-4 py-2 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-sm font-medium text-gray-700">{t('course.viewProgress')}</span>
+                <span className="text-sm text-gray-500">{videoTrackingData.viewPercent}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3">
+                <div className="bg-green-500 h-3 rounded-full transition-all" style={{ width: `${videoTrackingData.viewPercent}%` }}></div>
+              </div>
+            </div>
+
+            {/* Student Table */}
+            <div className="flex-1 overflow-auto p-4">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 dark:bg-gray-700">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600 dark:text-gray-300">{t('course.student')}</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600 dark:text-gray-300">{t('course.viewed')}</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600 dark:text-gray-300">{t('course.duration')}</th>
+                    <th className="px-3 py-2 text-center font-medium text-gray-600 dark:text-gray-300">{t('course.faceStatus')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {videoTrackingData.students.map(s => (
+                    <tr key={s.studentId} className="border-b border-gray-100 dark:border-gray-700">
+                      <td className="px-3 py-2 font-medium text-gray-900 dark:text-white">{s.studentName}</td>
+                      <td className="px-3 py-2 text-center">
+                        {s.openedAt ? (
+                          <CheckCircle className="w-4 h-4 text-green-500 inline" />
+                        ) : (
+                          <XCircle className="w-4 h-4 text-gray-300 inline" />
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-center text-gray-600 dark:text-gray-400">
+                        {s.durationSec ? `${Math.round(s.durationSec / 60)}min` : '—'}
+                      </td>
+                      <td className="px-3 py-2 text-center">
+                        {s.faceVerified === null ? (
+                          <span className="text-gray-400">—</span>
+                        ) : s.faceVerified ? (
+                          <span className="inline-flex items-center gap-1 text-green-600"><CheckCircle className="w-3 h-3" /> {t('course.matched')}</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-red-600"><AlertTriangle className="w-3 h-3" /> {t('course.mismatched')}</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end p-4 border-t border-gray-200 dark:border-gray-700">
+              <button onClick={() => { setShowVideoTracking(false); setVideoTrackingData(null); }} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium rounded-lg text-sm">
+                {t('common.close')}
               </button>
             </div>
           </div>

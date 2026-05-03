@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Lucy LMS - Use Case Diagrams</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<style>
+  body { background: #0f0f1a; color: #e0e0e0; font-family: 'Segoe UI', sans-serif; padding: 30px; }
+  h1 { text-align: center; color: #7c6fff; margin-bottom: 30px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 25px; max-width: 1400px; margin: 0 auto; }
+  .card { background: #1a1a2e; border: 1px solid #2d2d5e; border-radius: 12px; padding: 18px; }
+  .card h2 { color: #6c63ff; font-size: 16px; margin-bottom: 12px; border-bottom: 1px solid #2d2d5e; padding-bottom: 6px; }
+  .mermaid { display: flex; justify-content: center; overflow-x: auto; }
+</style>
+</head>
+<body>
+<h1>Lucy LMS - Use Case Diagrams</h1>
+<div class="grid">
+
+<div class="card"><h2>Authentication</h2>
+<div class="mermaid">
+graph LR
+    STU((Student)) --> UC1((Login))
+    TCH((Teacher)) --> UC1
+    ADM((Admin)) --> UC1
+    STU --> UC2((Register))
+    STU --> UC3((View Profile))
+    TCH --> UC3
+    ADM --> UC3
+</div></div>
+
+<div class="card"><h2>Course Management</h2>
+<div class="mermaid">
+graph LR
+    STU((Student)) --> UC1((Browse Courses))
+    STU --> UC2((View Course Details))
+    TCH((Teacher)) --> UC2
+    ADM((Admin)) --> UC3((Manage Courses))
+    ADM --> UC4((Assign Teacher))
+    STU --> UC5((Add/Drop Course))
+</div></div>
+
+<div class="card"><h2>Materials</h2>
+<div class="mermaid">
+graph LR
+    TCH((Teacher)) --> UC1((Upload Materials))
+    STU((Student)) --> UC2((View Materials))
+    STU --> UC3((Watch Video))
+    SYS((System)) --> UC4((Track Views))
+    UC3 -.->|includes| UC5((Face Tracking))
+</div></div>
+
+<div class="card"><h2>Assessments and Exams</h2>
+<div class="mermaid">
+graph LR
+    TCH((Teacher)) --> UC1((Create Assessment))
+    TCH --> UC2((Add Questions))
+    TCH --> UC3((Schedule Exam))
+    STU((Student)) --> UC4((Take Exam))
+    STU --> UC5((Submit Exam))
+    STU --> UC6((View Results))
+    TCH --> UC6
+    STU --> UC7((Report Question))
+    TCH --> UC8((Review Reports))
+    UC4 -.->|includes| UC9((Auto-save))
+    UC4 -.->|extends| UC10((Resume Exam))
+    UC4 -.->|includes| UC11((Face Verify))
+</div></div>
+
+<div class="card"><h2>Live Sessions</h2>
+<div class="mermaid">
+graph LR
+    TCH((Teacher)) --> UC1((Create Session))
+    STU((Student)) --> UC2((Join Session))
+    STU --> UC3((Leave Session))
+    TCH --> UC4((End Session))
+    TCH --> UC5((View Attendance))
+    UC2 -.->|includes| UC6((Record Attendance))
+    UC2 -.->|includes| UC7((Face Tracking))
+    UC7 -.->|extends| UC8((Notify Teacher))
+</div></div>
+
+<div class="card"><h2>Gradebook</h2>
+<div class="mermaid">
+graph LR
+    STU((Student)) --> UC1((View Grades))
+    TCH((Teacher)) --> UC2((Manage Components))
+    TCH --> UC3((Enter Grades))
+    TCH --> UC4((Publish Grades))
+    ADM((Admin)) --> UC5((Generate Certificate))
+    UC3 -.->|includes| UC6((Calculate Final))
+</div></div>
+
+<div class="card"><h2>Face Verification</h2>
+<div class="mermaid">
+graph LR
+    SYS((System)) --> UC1((Capture Face))
+    SYS --> UC2((Verify Identity))
+    SYS --> UC3((Detect Absence))
+    SYS --> UC4((Flag Mismatch))
+    TCH((Teacher)) --> UC5((Review Alerts))
+    UC1 -.->|includes| UC2
+    UC1 -.->|includes| UC3
+    UC2 -.->|extends| UC4
+    UC4 -.->|includes| UC6((Notify Teacher))
+</div></div>
+
+<div class="card"><h2>Academic Admin</h2>
+<div class="mermaid">
+graph LR
+    ADM((Admin)) --> UC1((Manage Semesters))
+    ADM --> UC2((Set Exam Periods))
+    ADM --> UC3((Manage Departments))
+    ADM --> UC4((Manage Classes))
+    ADM --> UC5((Manage Users))
+    ADM --> UC6((Approve Profiles))
+</div></div>
+
+<div class="card"><h2>Payments</h2>
+<div class="mermaid">
+graph LR
+    STU((Student)) --> UC1((Make Payment))
+    SYS((System)) --> UC2((Verify via Chapa))
+    STU --> UC3((View Payment Status))
+    ADM((Admin)) --> UC3
+    UC1 -.->|includes| UC2
+</div></div>
+
+<div class="card"><h2>Notifications</h2>
+<div class="mermaid">
+graph LR
+    SYS((System)) --> UC1((Send Notification))
+    STU((Student)) --> UC2((Receive Notification))
+    TCH((Teacher)) --> UC2
+    STU --> UC3((Mark as Read))
+    TCH --> UC3
+</div></div>
+
+<div class="card"><h2>Analytics and ML</h2>
+<div class="mermaid">
+graph LR
+    ADM((Admin)) --> UC1((View Analytics))
+    TCH((Teacher)) --> UC1
+    ADM --> UC2((Train ML Model))
+    SYS((System)) --> UC3((Predict Performance))
+</div></div>
+
+</div>
+<script>mermaid.initialize({startOnLoad:true,theme:'dark',themeVariables:{primaryColor:'#2d2d5e',primaryTextColor:'#e0e0e0',primaryBorderColor:'#6c63ff',lineColor:'#888'}});</script>
+</body>
+</html>

@@ -3,7 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { register } from '../api';
 import { useTheme } from '../ThemeContext';
 import { useTranslation } from 'react-i18next';
-import { GraduationCap, Mail, Lock, User, AlertCircle, Users, Sun, Moon, CheckCircle, Check, X } from 'lucide-react';
+import { GraduationCap, Mail, Lock, User, AlertCircle, Users, Sun, Moon, CheckCircle, Check, X, Phone } from 'lucide-react';
 import lucyLogo from '../assets/lucy_logobg.png';
 
 // Password validation helper
@@ -36,9 +36,11 @@ export default function RegisterPage() {
     password: '',
     confirmPassword: '',
     fullName: '',
+    phone: '',
     role: 'STUDENT',
   });
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
@@ -54,20 +56,28 @@ export default function RegisterPage() {
     e.preventDefault();
     setError('');
     setSuccess('');
-    
-    if (!isValid) {
-      setError(t('register.passwordRequirements'));
+    const errors = {};
+
+    if (!form.fullName.trim()) errors.fullName = t('register.fullNameRequired');
+    else if (/\d/.test(form.fullName)) errors.fullName = t('register.nameNoNumbers');
+    if (!form.email.trim()) errors.email = t('register.emailRequired');
+    if (form.email.includes('@')) errors.email = t('register.noAtInEmail');
+    if (!isValid) errors.password = t('register.passwordRequirements');
+    if (form.password !== form.confirmPassword) errors.confirmPassword = t('register.passwordsDoNotMatch');
+    if (form.role === 'STUDENT') {
+      if (!form.phone.trim()) errors.phone = t('register.phoneRequired');
+      else if (!/^9\d{8}$/.test(form.phone.replace(/[\s\-()]/g, ''))) errors.phone = t('register.invalidPhone');
+    }
+
+    if (Object.keys(errors).length > 0) {
+      setFieldErrors(errors);
       return;
     }
-    
-    if (form.password !== form.confirmPassword) {
-      setError(t('register.passwordsDoNotMatch'));
-      return;
-    }
+    setFieldErrors({});
     
     setLoading(true);
     try {
-      const result = await register(form);
+      const result = await register({ ...form, email: form.email.split('@')[0] });
       setSuccess(t('register.accountCreatedApproval'));
       setTimeout(() => navigate('/login'), 3000);
     } catch (err) {
@@ -122,12 +132,13 @@ export default function RegisterPage() {
                 <input
                   type="text"
                   value={form.fullName}
-                  onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                  onChange={(e) => { setForm({ ...form, fullName: e.target.value.replace(/[^a-zA-Z\s\u1200-\u137F\u1380-\u139F\u2C80-\u2CFF]/g, '') }); setFieldErrors({ ...fieldErrors, fullName: '' }); }}
                   required
-                  className="w-full pl-11 pr-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
+                  className={`w-full pl-11 pr-4 py-3 border rounded-lg focus:ring-2 focus:border-transparent outline-none transition-all dark:bg-gray-700 dark:text-white ${fieldErrors.fullName ? 'border-red-500 dark:border-red-400 focus:ring-red-500' : 'border-gray-200 dark:border-gray-600 focus:ring-primary-500'}`}
                   placeholder={t('register.fullNamePlaceholder')}
                 />
               </div>
+              {fieldErrors.fullName && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{fieldErrors.fullName}</p>}
             </div>
 
             <div>
@@ -135,14 +146,16 @@ export default function RegisterPage() {
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
                 <input
-                  type="email"
+                  type="text"
                   value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  onChange={(e) => { setForm({ ...form, email: e.target.value }); setFieldErrors({ ...fieldErrors, email: '' }); }}
                   required
-                  className="w-full pl-11 pr-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
+                  className={`w-full pl-11 pr-24 py-3 border rounded-lg focus:ring-2 focus:border-transparent outline-none transition-all dark:bg-gray-700 dark:text-white ${fieldErrors.email ? 'border-red-500 dark:border-red-400 focus:ring-red-500' : 'border-gray-200 dark:border-gray-600 focus:ring-primary-500'}`}
                   placeholder={t('register.emailPlaceholder')}
                 />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-gray-500 text-sm font-medium">@lucy.edu</span>
               </div>
+              {fieldErrors.email && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{fieldErrors.email}</p>}
             </div>
 
             <div>
@@ -152,14 +165,15 @@ export default function RegisterPage() {
                 <input
                   type="password"
                   value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  onChange={(e) => { setForm({ ...form, password: e.target.value }); setFieldErrors({ ...fieldErrors, password: '' }); }}
                   onFocus={() => setPasswordFocused(true)}
                   onBlur={() => setPasswordFocused(false)}
                   required
-                  className="w-full pl-11 pr-4 py-3 border border-gray-200 dark:border-gray-600 dark:bg-gray-700 dark:text-white rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all"
+                  className={`w-full pl-11 pr-4 py-3 border rounded-lg focus:ring-2 focus:border-transparent outline-none transition-all dark:bg-gray-700 dark:text-white ${fieldErrors.password ? 'border-red-500 dark:border-red-400 focus:ring-red-500' : 'border-gray-200 dark:border-gray-600 focus:ring-primary-500'}`}
                   placeholder={t('register.createPassword')}
                 />
               </div>
+              {fieldErrors.password && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{fieldErrors.password}</p>}
               {/* Password requirements */}
               {passwordFocused && (
                 <div className="mt-2 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg space-y-1">
@@ -178,19 +192,18 @@ export default function RegisterPage() {
                 <input
                   type="password"
                   value={form.confirmPassword}
-                  onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })}
+                  onChange={(e) => { setForm({ ...form, confirmPassword: e.target.value }); setFieldErrors({ ...fieldErrors, confirmPassword: '' }); }}
                   onFocus={() => setConfirmFocused(true)}
                   onBlur={() => setConfirmFocused(false)}
                   required
                   className={`w-full pl-11 pr-4 py-3 border rounded-lg focus:ring-2 focus:border-transparent outline-none transition-all dark:bg-gray-700 dark:text-white ${
-                    form.confirmPassword && (passwordsMatch 
+                    fieldErrors.confirmPassword ? 'border-red-500 dark:border-red-400 focus:ring-red-500' : form.confirmPassword && (passwordsMatch 
                       ? 'border-green-500 dark:border-green-400 focus:ring-green-500' 
-                      : 'border-red-500 dark:border-red-400 focus:ring-red-500')
-                    } border-gray-200 dark:border-gray-600 focus:ring-primary-500`
-                  }
+                      : 'border-gray-200 dark:border-gray-600 focus:ring-primary-500')
+                  }`}
                   placeholder={t('register.confirmYourPassword')}
                 />
-                {form.confirmPassword && (
+                {form.confirmPassword && !fieldErrors.confirmPassword && (
                   <div className="absolute right-3 top-1/2 -translate-y-1/2">
                     {passwordsMatch 
                       ? <Check className="w-5 h-5 text-green-500" />
@@ -199,8 +212,8 @@ export default function RegisterPage() {
                   </div>
                 )}
               </div>
-              {form.confirmPassword && !passwordsMatch && (
-                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{t('register.passwordsDoNotMatch')}</p>
+              {(fieldErrors.confirmPassword || (form.confirmPassword && !passwordsMatch)) && (
+                <p className="mt-1 text-sm text-red-600 dark:text-red-400">{fieldErrors.confirmPassword || t('register.passwordsDoNotMatch')}</p>
               )}
             </div>
 
@@ -218,6 +231,25 @@ export default function RegisterPage() {
                 </select>
               </div>
             </div>
+
+            {form.role === 'STUDENT' && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">{t('register.phoneNumber')} <span className="text-red-500">*</span></label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400 dark:text-gray-500" />
+                  <span className="absolute left-11 top-1/2 -translate-y-1/2 text-gray-500 dark:text-gray-400 text-sm font-medium">+251</span>
+                  <input
+                    type="tel"
+                    value={form.phone}
+                    onChange={(e) => { setForm({ ...form, phone: e.target.value.replace(/[^0-9]/g, '') }); setFieldErrors({ ...fieldErrors, phone: '' }); }}
+                    required={form.role === 'STUDENT'}
+                    className={`w-full pl-[5.5rem] pr-4 py-3 border rounded-lg focus:ring-2 focus:border-transparent outline-none transition-all dark:bg-gray-700 dark:text-white ${fieldErrors.phone ? 'border-red-500 dark:border-red-400 focus:ring-red-500' : 'border-gray-200 dark:border-gray-600 focus:ring-primary-500'}`}
+                    placeholder="9XX XXX XXXX"
+                  />
+                </div>
+                {fieldErrors.phone ? <p className="mt-1 text-sm text-red-600 dark:text-red-400">{fieldErrors.phone}</p> : <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{t('register.phoneNote')}</p>}
+              </div>
+            )}
 
             <button
               type="submit"

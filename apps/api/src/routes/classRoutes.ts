@@ -3,6 +3,7 @@ import type { Request, Response, Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db';
 import { authRequired, requireRole, type AuthedRequest } from '../middleware';
+import { createAuditLog } from '../auditLog';
 
 export function registerClassRoutes(router: Router) {
   // Create a new class (Admin only)
@@ -150,11 +151,24 @@ export function registerClassRoutes(router: Router) {
       return;
     }
 
+    // Check if student is already in another class
+    const existingClass = await prisma.classStudent.findFirst({
+      where: { studentId: body.studentId },
+      include: { class: { select: { id: true, name: true, code: true } } },
+    });
+    if (existingClass && existingClass.classId !== params.classId) {
+      res.status(400).json({
+        error: `Student is already in class "${existingClass.class.name}" (${existingClass.class.code}). Remove from current class first.`,
+      });
+      return;
+    }
+
     try {
       const classStudent = await prisma.classStudent.create({
         data: { classId: params.classId, studentId: body.studentId },
         include: { student: { select: { id: true, fullName: true, email: true } } },
       });
+      createAuditLog({ userId: req.user!.id, userRole: 'ADMIN', action: 'CLASS_ASSIGN', category: 'CLASS', targetId: body.studentId, targetType: 'ClassStudent', description: `Admin assigned ${classStudent.student?.fullName} to class ${params.classId}`, ipAddress: req.ip });
       res.json(classStudent);
     } catch {
       res.status(400).json({ error: 'already_in_class' });

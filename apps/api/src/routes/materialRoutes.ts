@@ -613,8 +613,8 @@ export function registerMaterialRoutes(router: Router) {
       }
 
       // If no HTML content, check if it's a PPTX that needs conversion
-      if (PPTX_TYPES.includes(material.fileType) && material.fileUrl) {
-        // Convert on-demand
+      if (material.fileType === 'pptx' && material.fileUrl) {
+        // Convert PPTX on-demand using python-pptx
         const htmlContent = await convertPptxToHtml(material.fileUrl, material.fileType, material.id);
         if (htmlContent) {
           await prisma.material.update({
@@ -625,6 +625,26 @@ export function registerMaterialRoutes(router: Router) {
           res.setHeader('Access-Control-Allow-Origin', '*');
           return res.send(htmlContent);
         }
+      }
+
+      // PPT (old format) not supported by python-pptx - return download page
+      if (material.fileType === 'ppt' && material.fileUrl) {
+        const downloadUrl = material.fileUrl.startsWith('data:')
+          ? `${req.protocol}://${req.get('host')}/api/materials/${material.id}/file`
+          : material.fileUrl;
+        const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+          body{font-family:Segoe UI,Arial,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f5f5f5}
+          .card{text-align:center;padding:40px;background:white;border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.1);max-width:500px}
+          h2{color:#333;margin-bottom:10px}p{color:#666;margin-bottom:20px}
+          a{display:inline-block;padding:12px 24px;background:#4f46e5;color:white;text-decoration:none;border-radius:8px;font-weight:600}
+          a:hover{background:#4338ca}
+        </style></head><body><div class="card">
+          <h2>Legacy PowerPoint Format</h2>
+          <p>This .ppt file uses the older PowerPoint format which cannot be previewed inline. Please download it to view.</p>
+          <a href="${downloadUrl}" target="_blank">Download File</a>
+        </div></body></html>`;
+        res.setHeader('Content-Type', 'text/html');
+        return res.send(html);
       }
 
       return res.status(404).json({ error: 'HTML version not available for this material' });

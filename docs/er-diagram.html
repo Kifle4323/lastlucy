@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>College LMS - ER Diagram</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; overflow: hidden; }
+#toolbar { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(15,23,42,0.95); backdrop-filter: blur(12px); border-bottom: 1px solid #1e293b; padding: 10px 20px; display: flex; align-items: center; gap: 16px; }
+#toolbar h1 { font-size: 18px; font-weight: 700; color: #60a5fa; white-space: nowrap; }
+#toolbar .sep { width: 1px; height: 24px; background: #334155; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; }
+.legend-item { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #94a3b8; }
+.legend-dot { width: 10px; height: 10px; border-radius: 3px; }
+#controls { margin-left: auto; display: flex; gap: 8px; }
+#controls button { background: #1e293b; border: 1px solid #334155; color: #94a3b8; padding: 6px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; transition: all 0.2s; }
+#controls button:hover { background: #334155; color: #e2e8f0; }
+#controls button.active { background: #3b82f6; color: white; border-color: #3b82f6; }
+#viewport { position: absolute; top: 52px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab; }
+#viewport.dragging { cursor: grabbing; }
+#canvas { position: absolute; transform-origin: 0 0; }
+svg.relations { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+.table { position: absolute; background: #1e293b; border: 1px solid #334155; border-radius: 10px; overflow: hidden; min-width: 200px; box-shadow: 0 4px 24px rgba(0,0,0,0.3); transition: box-shadow 0.2s, border-color 0.2s; }
+.table:hover { box-shadow: 0 8px 32px rgba(0,0,0,0.5); border-color: #475569; z-index: 10; }
+.table-header { padding: 8px 12px; font-weight: 700; font-size: 13px; text-align: center; letter-spacing: 0.5px; }
+.table-body { padding: 0; }
+.col { padding: 3px 12px; font-size: 11px; font-family: 'Cascadia Code', 'Fira Code', monospace; border-top: 1px solid rgba(51,65,85,0.5); white-space: nowrap; display: flex; justify-content: space-between; gap: 12px; }
+.col:first-child { border-top: none; }
+.col-name { color: #cbd5e1; }
+.col-type { color: #64748b; font-size: 10px; }
+.col.pk .col-name { color: #fbbf24; font-weight: 600; }
+.col.fk .col-name { color: #60a5fa; }
+.col.uk .col-name { color: #a78bfa; }
+.badge { display: inline-block; font-size: 9px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-weight: 600; }
+.badge-pk { background: rgba(251,191,36,0.15); color: #fbbf24; }
+.badge-fk { background: rgba(96,165,250,0.15); color: #60a5fa; }
+.badge-uk { background: rgba(167,139,250,0.15); color: #a78bfa; }
+/* Category colors */
+.cat-user .table-header { background: linear-gradient(135deg, #1e40af, #1e3a8a); color: #93c5fd; }
+.cat-academic .table-header { background: linear-gradient(135deg, #065f46, #064e3b); color: #6ee7b7; }
+.cat-course .table-header { background: linear-gradient(135deg, #7c2d12, #6b1d0e); color: #fdba74; }
+.cat-assessment .table-header { background: linear-gradient(135deg, #581c87, #4c1d95); color: #c4b5fd; }
+.cat-verification .table-header { background: linear-gradient(135deg, #991b1b, #7f1d1d); color: #fca5a5; }
+.cat-material .table-header { background: linear-gradient(135deg, #166534, #14532d); color: #86efac; }
+.cat-session .table-header { background: linear-gradient(135deg, #854d0e, #713f12); color: #fde047; }
+.cat-other .table-header { background: linear-gradient(135deg, #475569, #334155); color: #cbd5e1; }
+.rel-line { fill: none; stroke-width: 1.5; opacity: 0.5; }
+.rel-line:hover { opacity: 1; stroke-width: 2.5; }
+.rel-1to1 { stroke: #60a5fa; }
+.rel-1tom { stroke: #34d399; }
+.rel-mtom { stroke: #f472b6; }
+.rel-label { font-size: 10px; font-weight: 700; fill: #94a3b8; pointer-events: none; }
+.rel-label-bg { fill: #0f172a; opacity: 0.8; }
+#minimap { position: fixed; bottom: 16px; right: 16px; width: 200px; height: 140px; background: rgba(15,23,42,0.9); border: 1px solid #334155; border-radius: 8px; z-index: 100; overflow: hidden; }
+#minimap canvas { width: 100%; height: 100%; }
+#minimap-viewport { position: absolute; border: 1.5px solid #3b82f6; border-radius: 2px; background: rgba(59,130,246,0.1); pointer-events: none; }
+#tooltip { position: fixed; background: #1e293b; border: 1px solid #475569; border-radius: 8px; padding: 10px 14px; font-size: 12px; z-index: 200; pointer-events: none; display: none; max-width: 300px; box-shadow: 0 8px 32px rgba(0,0,0,0.5); }
+#tooltip .tt-title { font-weight: 700; color: #60a5fa; margin-bottom: 4px; }
+#tooltip .tt-body { color: #94a3b8; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>College LMS — ER Diagram</h1>
+  <div class="sep"></div>
+  <div class="legend">
+    <div class="legend-item"><div class="legend-dot" style="background:#3b82f6"></div>User</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#10b981"></div>Academic</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#f97316"></div>Course</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#8b5cf6"></div>Assessment</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#ef4444"></div>Verification</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#22c55e"></div>Material</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#eab308"></div>Session</div>
+    <div class="legend-item"><div class="legend-dot" style="background:#64748b"></div>Other</div>
+  </div>
+  <div class="sep"></div>
+  <div class="legend">
+    <div class="legend-item"><span style="color:#fbbf24;font-weight:700">PK</span> Primary Key</div>
+    <div class="legend-item"><span style="color:#60a5fa;font-weight:700">FK</span> Foreign Key</div>
+    <div class="legend-item"><span style="color:#a78bfa;font-weight:700">UK</span> Unique</div>
+  </div>
+  <div id="controls">
+    <button onclick="zoomIn()">+</button>
+    <button onclick="zoomOut()">−</button>
+    <button onclick="resetView()">Reset</button>
+    <button id="btnRel" class="active" onclick="toggleRels()">Relations</button>
+  </div>
+</div>
+
+<div id="viewport">
+  <div id="canvas">
+    <svg class="relations" id="relSvg"></svg>
+  </div>
+</div>
+
+<div id="minimap"><canvas id="minimapCanvas"></canvas><div id="minimap-viewport"></div></div>
+<div id="tooltip"><div class="tt-title"></div><div class="tt-body"></div></div>
+
+<script>
+const tables = [
+  { id:"user", name:"User", cat:"cat-user", x:40, y:40, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"email",t:"string",uk:1},{n:"passwordHash",t:"string"},{n:"fullName",t:"string"},
+    {n:"role",t:"Role"},{n:"profileImage",t:"string?"},{n:"isProfileComplete",t:"boolean"},{n:"isApproved",t:"boolean"},
+    {n:"createdAt",t:"datetime"},{n:"updatedAt",t:"datetime"}
+  ]},
+  { id:"studentProfile", name:"StudentProfile", cat:"cat-user", x:340, y:40, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"userId",t:"uuid",fk:"user"},{n:"status",t:"ProfileStatus",uk:1},
+    {n:"firstName",t:"string?"},{n:"fatherName",t:"string?"},{n:"gender",t:"string?"},
+    {n:"dateOfBirthGC",t:"date?"},{n:"phone",t:"string?"},{n:"citizenship",t:"string?"},
+    {n:"stream",t:"string?"},{n:"entryYear",t:"int?"},{n:"nationalExamResultTotal",t:"int?"},
+    {n:"examEnglish",t:"int?"},{n:"examPhysics",t:"int?"},{n:"examChemistry",t:"int?"},
+    {n:"examBiology",t:"int?"},{n:"examNaturalMath",t:"int?"},{n:"examAptitude",t:"int?"}
+  ]},
+  { id:"studentDoc", name:"StudentDocument", cat:"cat-user", x:660, y:40, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"studentProfileId",t:"uuid",fk:"studentProfile"},
+    {n:"documentType",t:"string"},{n:"fileName",t:"string?"},{n:"fileUrl",t:"string?"},{n:"status",t:"string"}
+  ]},
+  { id:"department", name:"Department", cat:"cat-academic", x:40, y:440, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"name",t:"string",uk:1},{n:"code",t:"string",uk:1},
+    {n:"pricePerCreditHour",t:"float"},{n:"totalCreditHours",t:"int"},
+    {n:"minGradeToGraduate",t:"float"},{n:"durationYears",t:"int"}
+  ]},
+  { id:"class", name:"Class", cat:"cat-academic", x:340, y:440, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"name",t:"string"},{n:"code",t:"string",uk:1},
+    {n:"year",t:"int?"},{n:"section",t:"string?"},{n:"departmentId",t:"uuid?",fk:"department"}
+  ]},
+  { id:"classStudent", name:"ClassStudent", cat:"cat-academic", x:660, y:260, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"classId",t:"uuid",fk:"class"},{n:"studentId",t:"uuid",fk:"user"}
+  ]},
+  { id:"classTeacher", name:"ClassTeacher", cat:"cat-academic", x:660, y:380, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"classId",t:"uuid",fk:"class"},{n:"teacherId",t:"uuid",fk:"user"}
+  ]},
+  { id:"academicYear", name:"AcademicYear", cat:"cat-academic", x:40, y:700, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"name",t:"string",uk:1},{n:"startDate",t:"date"},
+    {n:"endDate",t:"date"},{n:"isActive",t:"boolean"}
+  ]},
+  { id:"semester", name:"Semester", cat:"cat-academic", x:340, y:700, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"academicYearId",t:"uuid",fk:"academicYear"},
+    {n:"type",t:"SemesterType"},{n:"name",t:"string"},{n:"startDate",t:"date"},
+    {n:"registrationStart",t:"date?"},{n:"addDropStart",t:"date?"},{n:"addDropEnd",t:"date?"},
+    {n:"status",t:"SemesterStatus"},{n:"isCurrent",t:"boolean"},{n:"registrationFee",t:"float?"}
+  ]},
+  { id:"course", name:"Course", cat:"cat-course", x:40, y:960, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"title",t:"string"},{n:"code",t:"string",uk:1},
+    {n:"description",t:"string?"},{n:"stream",t:"string?"},{n:"creditHours",t:"int"},
+    {n:"ectsCredits",t:"int"}
+  ]},
+  { id:"courseClass", name:"CourseClass", cat:"cat-course", x:660, y:500, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},{n:"classId",t:"uuid",fk:"class"},
+    {n:"teacherId",t:"uuid?",fk:"user"}
+  ]},
+  { id:"courseSection", name:"CourseSection", cat:"cat-course", x:660, y:640, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},{n:"semesterId",t:"uuid",fk:"semester"},
+    {n:"teacherId",t:"uuid",fk:"user"},{n:"classId",t:"uuid?",fk:"class"},
+    {n:"sectionCode",t:"string"},{n:"deliveryMode",t:"DeliveryMode"},
+    {n:"schedule",t:"string?"},{n:"room",t:"string?"},{n:"maxCapacity",t:"int?"},{n:"isPublished",t:"boolean"}
+  ]},
+  { id:"enrollment", name:"StudentEnrollment", cat:"cat-course", x:980, y:540, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseSectionId",t:"uuid",fk:"courseSection"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"enrolledAt",t:"datetime"},{n:"status",t:"string"}
+  ]},
+  { id:"studentGrade", name:"StudentGrade", cat:"cat-course", x:1300, y:540, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"enrollmentId",t:"uuid",fk:"enrollment",uk:1},
+    {n:"quizScore",t:"float?"},{n:"assignmentScore",t:"float?"},{n:"midtermScore",t:"float?"},
+    {n:"finalScore",t:"float?"},{n:"attendanceScore",t:"float?"},{n:"totalScore",t:"float?"},
+    {n:"gradeLetter",t:"GradeLetter?"},{n:"gradePoint",t:"float?"},
+    {n:"isSubmitted",t:"boolean"},{n:"isPublished",t:"boolean"}
+  ]},
+  { id:"gradeComponent", name:"GradeComponent", cat:"cat-course", x:340, y:960, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},{n:"name",t:"string"},
+    {n:"weight",t:"int"},{n:"sortOrder",t:"int"}
+  ]},
+  { id:"gradeConfig", name:"CourseGradeConfig", cat:"cat-course", x:340, y:1120, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course",uk:1},
+    {n:"quizWeight",t:"int"},{n:"midtermWeight",t:"int"},{n:"finalWeight",t:"int"},
+    {n:"attendanceWeight",t:"int"}
+  ]},
+  { id:"assessment", name:"Assessment", cat:"cat-assessment", x:660, y:920, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},
+    {n:"componentId",t:"uuid?",fk:"gradeComponent"},{n:"title",t:"string"},
+    {n:"examType",t:"ExamType"},{n:"deliveryMode",t:"DeliveryMode"},
+    {n:"timeLimit",t:"int?"},{n:"maxScore",t:"int"},{n:"isOpen",t:"boolean"},
+    {n:"scheduledStart",t:"date?"},{n:"scheduledEnd",t:"date?"}
+  ]},
+  { id:"question", name:"Question", cat:"cat-assessment", x:980, y:880, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"assessmentId",t:"uuid",fk:"assessment"},
+    {n:"type",t:"QuestionType"},{n:"prompt",t:"text"},
+    {n:"optionA-D",t:"string?"},{n:"correct",t:"string?"},{n:"correctAnswer",t:"string?"},
+    {n:"modelAnswer",t:"text?"},{n:"points",t:"int"}
+  ]},
+  { id:"attempt", name:"Attempt", cat:"cat-assessment", x:660, y:1180, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"assessmentId",t:"uuid",fk:"assessment"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"status",t:"AttemptStatus"},
+    {n:"score",t:"int?"},{n:"startedAt",t:"datetime"},{n:"submittedAt",t:"date?"},
+    {n:"remainingSeconds",t:"int?"},{n:"faceVerified",t:"boolean"}
+  ]},
+  { id:"answer", name:"Answer", cat:"cat-assessment", x:980, y:1120, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"attemptId",t:"uuid",fk:"attempt"},
+    {n:"questionId",t:"uuid",fk:"question"},{n:"selected",t:"string?"},
+    {n:"textAnswer",t:"string?"},{n:"isCorrect",t:"boolean?"},{n:"score",t:"int?"},{n:"feedback",t:"string?"}
+  ]},
+  { id:"faceVerification", name:"FaceVerification", cat:"cat-verification", x:980, y:1340, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"attemptId",t:"uuid",fk:"attempt",uk:1},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"capturedImage",t:"string"},
+    {n:"matchedImage",t:"string?"},{n:"matchResult",t:"boolean"},
+    {n:"adminReviewed",t:"boolean"},{n:"adminApproved",t:"boolean"}
+  ]},
+  { id:"videoFaceVerification", name:"VideoFaceVerification", cat:"cat-verification", x:1300, y:1340, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"materialId",t:"uuid",fk:"material"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"capturedImage",t:"string"},
+    {n:"matchedImage",t:"string?"},{n:"matchResult",t:"boolean"},
+    {n:"adminReviewed",t:"boolean"},{n:"adminApproved",t:"boolean"}
+  ]},
+  { id:"material", name:"Material", cat:"cat-material", x:40, y:1360, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},
+    {n:"createdBy",t:"uuid",fk:"user"},{n:"title",t:"string"},
+    {n:"content",t:"text?"},{n:"fileUrl",t:"string?"},{n:"fileType",t:"string?"},
+    {n:"fileName",t:"string?"},{n:"previewFileUrl",t:"string?"}
+  ]},
+  { id:"materialView", name:"MaterialView", cat:"cat-material", x:340, y:1360, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"materialId",t:"uuid",fk:"material"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"openedAt",t:"datetime"},
+    {n:"closedAt",t:"date?"},{n:"durationSec",t:"int?"}
+  ]},
+  { id:"readingProgress", name:"MaterialReadingProgress", cat:"cat-material", x:660, y:1360, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"materialId",t:"uuid",fk:"material"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"totalTime",t:"int"},
+    {n:"completedSlides",t:"int"},{n:"totalSlides",t:"int"},{n:"isCompleted",t:"boolean"}
+  ]},
+  { id:"liveSession", name:"LiveSession", cat:"cat-session", x:980, y:1500, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},
+    {n:"classId",t:"uuid",fk:"class"},{n:"teacherId",t:"uuid",fk:"user"},
+    {n:"title",t:"string"},{n:"scheduledAt",t:"datetime"},{n:"duration",t:"int"},
+    {n:"status",t:"string"},{n:"meetingUrl",t:"string"}
+  ]},
+  { id:"liveAttendance", name:"LiveSessionAttendance", cat:"cat-session", x:1300, y:1500, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"sessionId",t:"uuid",fk:"liveSession"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"joinedAt",t:"datetime"},
+    {n:"leftAt",t:"date?"},{n:"duration",t:"int?"},{n:"faceAlerts",t:"int"},{n:"status",t:"string"}
+  ]},
+  { id:"manualAttSession", name:"ManualAttendanceSession", cat:"cat-session", x:980, y:1680, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},
+    {n:"classId",t:"uuid",fk:"class"},{n:"teacherId",t:"uuid",fk:"user"},
+    {n:"title",t:"string"},{n:"date",t:"datetime"}
+  ]},
+  { id:"manualAttRecord", name:"ManualAttendanceRecord", cat:"cat-session", x:1300, y:1680, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"sessionId",t:"uuid",fk:"manualAttSession"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"status",t:"string"}
+  ]},
+  { id:"examSchedule", name:"ExamSchedule", cat:"cat-course", x:980, y:700, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseSectionId",t:"uuid",fk:"courseSection"},
+    {n:"examType",t:"ExamType"},{n:"officialDate",t:"date?"},
+    {n:"proposedDate",t:"date?"},{n:"duration",t:"int"},
+    {n:"location",t:"string?"},{n:"earlyExamStatus",t:"string"}
+  ]},
+  { id:"earlyExamReq", name:"EarlyExamRequest", cat:"cat-course", x:1300, y:700, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"examScheduleId",t:"uuid",fk:"examSchedule"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"agreed",t:"boolean"}
+  ]},
+  { id:"manualGrade", name:"ManualGrade", cat:"cat-assessment", x:980, y:1020, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"assessmentId",t:"uuid",fk:"assessment"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"score",t:"int"},{n:"feedback",t:"string?"}
+  ]},
+  { id:"attendance", name:"Attendance", cat:"cat-session", x:660, y:1560, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"courseId",t:"uuid",fk:"course"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"score",t:"int"},{n:"feedback",t:"string?"}
+  ]},
+  { id:"addDrop", name:"AddDropRequest", cat:"cat-other", x:1300, y:840, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"studentId",t:"uuid",fk:"user"},
+    {n:"semesterId",t:"uuid",fk:"semester"},{n:"courseSectionId",t:"uuid?",fk:"courseSection"},
+    {n:"courseId",t:"uuid",fk:"course"},{n:"type",t:"AddDropType"},
+    {n:"reason",t:"string?"},{n:"status",t:"AddDropStatus"}
+  ]},
+  { id:"questionReport", name:"QuestionReport", cat:"cat-other", x:1300, y:960, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"questionId",t:"uuid",fk:"question"},
+    {n:"studentId",t:"uuid",fk:"user"},{n:"reason",t:"string"},
+    {n:"status",t:"ReportStatus"},{n:"adminNotes",t:"string?"}
+  ]},
+  { id:"notification", name:"Notification", cat:"cat-other", x:340, y:1280, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"userId",t:"uuid",fk:"user"},
+    {n:"type",t:"string"},{n:"title",t:"string"},{n:"message",t:"string"},
+    {n:"data",t:"json?"},{n:"isRead",t:"boolean"}
+  ]},
+  { id:"certificate", name:"Certificate", cat:"cat-other", x:340, y:1460, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"studentId",t:"uuid",fk:"user"},
+    {n:"departmentId",t:"uuid",fk:"department"},{n:"certificateNumber",t:"string",uk:1},
+    {n:"cgpa",t:"float"},{n:"totalCreditHours",t:"int"}
+  ]},
+  { id:"semesterPayment", name:"SemesterPayment", cat:"cat-other", x:660, y:1680, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"studentId",t:"uuid",fk:"user"},
+    {n:"semesterId",t:"uuid",fk:"semester"},{n:"amount",t:"float"},
+    {n:"txRef",t:"string",uk:1},{n:"status",t:"PaymentStatus"}
+  ]},
+  { id:"auditLog", name:"AuditLog", cat:"cat-other", x:660, y:1820, cols:[
+    {n:"id",t:"uuid",pk:1},{n:"userId",t:"uuid?",fk:"user"},
+    {n:"action",t:"string"},{n:"category",t:"string"},
+    {n:"description",t:"string"},{n:"ipAddress",t:"string?"}
+  ]}
+];
+
+const rels = [
+  {from:"user",to:"studentProfile",card:"1:0..1",type:"1to1"},
+  {from:"studentProfile",to:"studentDoc",card:"1:*",type:"1tom"},
+  {from:"department",to:"class",card:"1:*",type:"1tom"},
+  {from:"class",to:"classStudent",card:"1:*",type:"1tom"},
+  {from:"class",to:"classTeacher",card:"1:*",type:"1tom"},
+  {from:"academicYear",to:"semester",card:"1:*",type:"1tom"},
+  {from:"semester",to:"courseSection",card:"1:*",type:"1tom"},
+  {from:"courseSection",to:"enrollment",card:"1:*",type:"1tom"},
+  {from:"enrollment",to:"studentGrade",card:"1:0..1",type:"1to1"},
+  {from:"courseSection",to:"examSchedule",card:"1:*",type:"1tom"},
+  {from:"examSchedule",to:"earlyExamReq",card:"1:*",type:"1tom"},
+  {from:"course",to:"gradeComponent",card:"1:*",type:"1tom"},
+  {from:"course",to:"gradeConfig",card:"1:0..1",type:"1to1"},
+  {from:"course",to:"assessment",card:"1:*",type:"1tom"},
+  {from:"course",to:"material",card:"1:*",type:"1tom"},
+  {from:"course",to:"attendance",card:"1:*",type:"1tom"},
+  {from:"assessment",to:"question",card:"1:*",type:"1tom"},
+  {from:"assessment",to:"attempt",card:"1:*",type:"1tom"},
+  {from:"assessment",to:"manualGrade",card:"1:*",type:"1tom"},
+  {from:"attempt",to:"answer",card:"1:*",type:"1tom"},
+  {from:"question",to:"answer",card:"1:*",type:"1tom"},
+  {from:"attempt",to:"faceVerification",card:"1:0..1",type:"1to1"},
+  {from:"material",to:"materialView",card:"1:*",type:"1tom"},
+  {from:"material",to:"readingProgress",card:"1:*",type:"1tom"},
+  {from:"material",to:"videoFaceVerification",card:"1:*",type:"1tom"},
+  {from:"liveSession",to:"liveAttendance",card:"1:*",type:"1tom"},
+  {from:"manualAttSession",to:"manualAttRecord",card:"1:*",type:"1tom"},
+  {from:"question",to:"questionReport",card:"1:*",type:"1tom"},
+  {from:"course",to:"courseClass",card:"1:*",type:"1tom"},
+  {from:"class",to:"courseClass",card:"1:*",type:"1tom"},
+];
+
+const tableMap = {};
+const tableEls = {};
+const canvas = document.getElementById('canvas');
+const viewport = document.getElementById('viewport');
+const relSvg = document.getElementById('relSvg');
+let scale = 1, panX = 0, panY = 0, showRels = true, autoFitted = false;
+
+// Render tables
+tables.forEach(t => {
+  tableMap[t.id] = t;
+  const el = document.createElement('div');
+  el.className = `table ${t.cat}`;
+  el.id = `tbl-${t.id}`;
+  el.style.left = t.x + 'px';
+  el.style.top = t.y + 'px';
+  let html = `<div class="table-header">${t.name}</div><div class="table-body">`;
+  t.cols.forEach(c => {
+    let cls = 'col';
+    let badge = '';
+    if (c.pk) { cls += ' pk'; badge = '<span class="badge badge-pk">PK</span>'; }
+    if (c.fk) { cls += ' fk'; badge += '<span class="badge badge-fk">FK</span>'; }
+    if (c.uk) { cls += ' uk'; badge += '<span class="badge badge-uk">UK</span>'; }
+    html += `<div class="${cls}"><span class="col-name">${c.n}${badge}</span><span class="col-type">${c.t}</span></div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  canvas.appendChild(el);
+  tableEls[t.id] = el;
+});
+
+function getCenter(id) {
+  const t = tableMap[id];
+  const el = tableEls[id];
+  if (!el) return {x:0,y:0};
+  const w = el.offsetWidth || 200;
+  const h = el.offsetHeight || 100;
+  return { x: t.x + w/2, y: t.y + h/2, w, h, t };
+}
+
+function getEdgePoint(fromId, toId) {
+  const f = getCenter(fromId), t = getCenter(toId);
+  const dx = t.x - f.x, dy = t.y - f.y;
+  const hw = f.w/2, hh = f.h/2;
+  let ex, ey;
+  if (Math.abs(dx) * hh > Math.abs(dy) * hw) {
+    ex = f.x + (dx > 0 ? hw : -hw);
+    ey = f.y + dy * hw / Math.abs(dx);
+  } else {
+    ey = f.y + (dy > 0 ? hh : -hh);
+    ex = f.x + dx * hh / Math.abs(dy);
+  }
+  return {x: ex, y: ey};
+}
+
+function drawRelations() {
+  relSvg.innerHTML = '';
+  const svgNS = 'http://www.w3.org/2000/svg';
+  relSvg.setAttribute('width', 3200);
+  relSvg.setAttribute('height', 3000);
+  rels.forEach((r, i) => {
+    const p1 = getEdgePoint(r.from, r.to);
+    const p2 = getEdgePoint(r.to, r.from);
+    const path = document.createElementNS(svgNS, 'path');
+    path.setAttribute('d', `M${p1.x},${p1.y} L${p2.x},${p2.y}`);
+    path.setAttribute('class', `rel-line rel-${r.type}`);
+    path.dataset.idx = i;
+    relSvg.appendChild(path);
+    // Cardinality labels
+    const labelFrom = document.createElementNS(svgNS, 'text');
+    const labelTo = document.createElementNS(svgNS, 'text');
+    const [cFrom, cTo] = r.card.split(':');
+    const angle = Math.atan2(p2.y - p1.y, p2.x - p1.x);
+    const off1 = 18, off2 = 18;
+    // Label backgrounds + text at source
+    const bgFrom = document.createElementNS(svgNS, 'rect');
+    const lfx = p1.x + Math.cos(angle) * off1 - 10;
+    const lfy = p1.y + Math.sin(angle) * off1 - 8;
+    bgFrom.setAttribute('x', lfx); bgFrom.setAttribute('y', lfy);
+    bgFrom.setAttribute('width', cFrom.length*7+6); bgFrom.setAttribute('height', 14);
+    bgFrom.setAttribute('class', 'rel-label-bg');
+    relSvg.appendChild(bgFrom);
+    labelFrom.setAttribute('x', lfx + 3);
+    labelFrom.setAttribute('y', lfy + 11);
+    labelFrom.setAttribute('class', 'rel-label');
+    labelFrom.textContent = cFrom;
+    // Label backgrounds + text at target
+    const bgTo = document.createElementNS(svgNS, 'rect');
+    const ltx = p2.x - Math.cos(angle) * off2 - 10;
+    const lty = p2.y - Math.sin(angle) * off2 - 8;
+    bgTo.setAttribute('x', ltx); bgTo.setAttribute('y', lty);
+    bgTo.setAttribute('width', cTo.length*7+6); bgTo.setAttribute('height', 14);
+    bgTo.setAttribute('class', 'rel-label-bg');
+    relSvg.appendChild(bgTo);
+    labelTo.setAttribute('x', ltx + 3);
+    labelTo.setAttribute('y', lty + 11);
+    labelTo.setAttribute('class', 'rel-label');
+    labelTo.textContent = cTo;
+    relSvg.appendChild(labelFrom);
+    relSvg.appendChild(labelTo);
+  });
+}
+
+setTimeout(drawRelations, 100);
+
+// Pan & Zoom
+let dragging = false, startX, startY;
+viewport.addEventListener('mousedown', e => {
+  if (e.target.closest('.table')) return;
+  dragging = true; startX = e.clientX - panX; startY = e.clientY - panY;
+  viewport.classList.add('dragging');
+});
+window.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  panX = e.clientX - startX; panY = e.clientY - startY;
+  applyTransform();
+});
+window.addEventListener('mouseup', () => { dragging = false; viewport.classList.remove('dragging'); });
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  const d = e.deltaY > 0 ? 0.9 : 1.1;
+  const rect = viewport.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  panX = mx - (mx - panX) * d;
+  panY = my - (my - panY) * d;
+  scale *= d;
+  scale = Math.max(0.2, Math.min(2, scale));
+  applyTransform();
+}, {passive: false});
+
+function applyTransform() {
+  canvas.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
+  updateMinimap();
+}
+
+function zoomIn() { scale = Math.min(2, scale * 1.2); applyTransform(); }
+function zoomOut() { scale = Math.max(0.2, scale * 0.8); applyTransform(); }
+function resetView() { scale = 0.75; panX = 0; panY = 0; applyTransform(); }
+function toggleRels() {
+  showRels = !showRels;
+  relSvg.style.display = showRels ? '' : 'none';
+  document.getElementById('btnRel').classList.toggle('active', showRels);
+}
+
+// Minimap
+function updateMinimap() {
+  const mc = document.getElementById('minimapCanvas');
+  const ctx = mc.getContext('2d');
+  mc.width = 200; mc.height = 140;
+  ctx.fillStyle = '#0f172a'; ctx.fillRect(0,0,200,140);
+  const s = 0.07;
+  ctx.translate(4, 4);
+  tables.forEach(t => {
+    const el = tableEls[t.id];
+    const w = (el?.offsetWidth || 200) * s;
+    const h = (el?.offsetHeight || 100) * s;
+    const colors = {
+      'cat-user':'#3b82f6','cat-academic':'#10b981','cat-course':'#f97316',
+      'cat-assessment':'#8b5cf6','cat-verification':'#ef4444','cat-material':'#22c55e',
+      'cat-session':'#eab308','cat-other':'#64748b'
+    };
+    ctx.fillStyle = colors[t.cat] || '#64748b';
+    ctx.fillRect(t.x*s, t.y*s, w, h);
+  });
+  // Viewport indicator
+  const vw = viewport.clientWidth, vh = viewport.clientHeight;
+  const vl = -panX/scale, vt = -panY/scale;
+  const mvp = document.getElementById('minimap-viewport');
+  mvp.style.left = (vl*s+4)+'px';
+  mvp.style.top = (vt*s+4)+'px';
+  mvp.style.width = (vw*scale*s)+'px';
+  mvp.style.height = (vh*scale*s)+'px';
+}
+setTimeout(updateMinimap, 200);
+
+// Tooltip on relation hover
+const tooltip = document.getElementById('tooltip');
+relSvg.addEventListener('mouseover', e => {
+  if (!e.target.classList.contains('rel-line')) return;
+  const r = rels[e.target.dataset.idx];
+  const ft = tableMap[r.from].name, tt = tableMap[r.to].name;
+  tooltip.querySelector('.tt-title').textContent = `${ft} → ${tt}`;
+  tooltip.querySelector('.tt-body').textContent = `Relationship: ${r.card}\n${ft} has ${r.card} ${tt}`;
+  tooltip.style.display = 'block';
+});
+relSvg.addEventListener('mousemove', e => {
+  tooltip.style.left = (e.clientX + 12) + 'px';
+  tooltip.style.top = (e.clientY + 12) + 'px';
+});
+relSvg.addEventListener('mouseout', () => { tooltip.style.display = 'none'; });
+
+function autoFit() {
+  let maxX = 0, maxY = 0;
+  tables.forEach(t => {
+    const el = tableEls[t.id];
+    const w = el?.offsetWidth || 200;
+    const h = el?.offsetHeight || 100;
+    if (t.x + w > maxX) maxX = t.x + w;
+    if (t.y + h > maxY) maxY = t.y + h;
+  });
+  maxX += 40; maxY += 40;
+  const vw = viewport.clientWidth;
+  const vh = viewport.clientHeight;
+  scale = Math.min(vw / maxX, vh / maxY);
+  scale = Math.min(scale, 1.0);
+  panX = (vw - maxX * scale) / 2;
+  panY = (vh - maxY * scale) / 2;
+  if (panX < 10) panX = 10;
+  if (panY < 10) panY = 10;
+  autoFitted = true;
+  applyTransform();
+  drawRelations();
+}
+
+window.addEventListener('resize', autoFit);
+setTimeout(autoFit, 300);
+</script>
+</body>
+</html>

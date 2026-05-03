@@ -171,7 +171,7 @@ export default function GradebookPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100 text-sm font-medium">{t('gradebook.totalGrade')}</p>
-                <p className="text-5xl font-bold mt-2">{myGrades.totalGrade > 0 ? `${myGrades.totalGrade}/100` : t('gradebook.notGraded')}</p>
+                <p className="text-5xl font-bold mt-2">{myGrades.totalGrade !== null && myGrades.totalGrade !== undefined ? `${myGrades.totalGrade}/100` : t('gradebook.notGraded')}</p>
               </div>
               <Award className="w-16 h-16 text-primary-200" />
             </div>
@@ -180,7 +180,8 @@ export default function GradebookPage() {
           {/* Grade Breakdown - Dynamic Components */}
           <div className="grid gap-4 md:grid-cols-2">
             {(myGrades.components || []).map(comp => {
-              const mark = myGrades.componentMarks?.[comp.id] || 0;
+              const mark = myGrades.componentMarks?.[comp.id];
+              const hasGrade = mark !== undefined && mark !== null;
               const details = myGrades.componentDetails?.[comp.id] || [];
               return (
                 <div key={comp.id} className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
@@ -202,7 +203,7 @@ export default function GradebookPage() {
                       <p className="text-sm text-gray-500">{comp.weight}% {t('gradebook.weight')}</p>
                     </div>
                   </div>
-                  <p className="text-3xl font-bold text-gray-900">{mark > 0 ? `${mark}/${comp.weight}` : t('gradebook.notGraded')}</p>
+                  <p className="text-3xl font-bold text-gray-900">{hasGrade ? `${mark}/${comp.weight}` : t('gradebook.notGraded')}</p>
                   {details.length > 0 && (
                     <div className="mt-4 space-y-2">
                       {details.map((d, i) => (
@@ -251,13 +252,13 @@ export default function GradebookPage() {
               <Settings className="w-4 h-4 inline mr-2" />
               {t('gradebook.weights')}
             </button>
-            <button
+            {/* <button
               onClick={() => setActiveView('attendance')}
               className={`px-4 py-2 font-medium rounded-lg ${activeView === 'attendance' ? 'bg-primary-900 text-white' : 'bg-gray-100 text-gray-700'}`}
             >
               <UserCheck className="w-4 h-4 inline mr-2" />
               {t('nav.attendance')}
-            </button>
+            </button> */}
             {user?.role === 'TEACHER' && (
               <Link
                 to={`/teacher/grades?course=${courseId}`}
@@ -359,7 +360,7 @@ export default function GradebookPage() {
         )}
 
         {/* Attendance Entry - Grouped by Class */}
-        {activeView === 'attendance' && gradebook && (() => {
+        {/* {activeView === 'attendance' && gradebook && (() => {
           // Group students by class
           const classGroups = {};
           gradebook.gradebook.forEach(g => {
@@ -465,7 +466,7 @@ export default function GradebookPage() {
               </div>
             </div>
           );
-        })()}
+        })()} */}
 
         {/* Gradebook View - Grouped by Class */}
         {activeView === 'gradebook' && gradebook && (() => {
@@ -525,18 +526,20 @@ export default function GradebookPage() {
                               </div>
                             </td>
                             {allComponents.map(comp => {
-                              const mark = g.componentMarks?.[comp.id] || 0;
+                              const mark = g.componentMarks?.[comp.id];
+                              const hasGrade = mark !== undefined && mark !== null;
+                              const displayMark = hasGrade ? mark : null;
                               return (
                                 <td key={comp.id} className="px-4 py-4 text-center">
-                                  <span className={`font-medium ${mark > 0 ? (mark / comp.weight * 100 >= 60 ? 'text-green-600' : 'text-red-600') : 'text-gray-400'}`}>
-                                    {mark > 0 ? `${mark}/${comp.weight}` : '-'}
+                                  <span className={`font-medium ${hasGrade ? (displayMark > 0 ? (displayMark / comp.weight * 100 >= 60 ? 'text-green-600' : 'text-red-600') : 'text-red-600') : 'text-gray-400'}`}>
+                                    {hasGrade ? `${displayMark}/${comp.weight}` : '-'}
                                   </span>
                                 </td>
                               );
                             })}
                             <td className="px-4 py-4 text-center bg-primary-50">
-                              <span className={`font-bold text-lg ${g.totalGrade > 0 ? (g.totalGrade >= 60 ? 'text-green-600' : 'text-red-600') : 'text-gray-400'}`}>
-                                {g.totalGrade > 0 ? g.totalGrade : '-'}
+                              <span className={`font-bold text-lg ${g.totalGrade > 0 ? (g.totalGrade >= 60 ? 'text-green-600' : 'text-red-600') : g.totalGrade === 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                                {g.totalGrade > 0 ? g.totalGrade : g.totalGrade === 0 ? '0' : '-'}
                               </span>
                             </td>
                           </tr>

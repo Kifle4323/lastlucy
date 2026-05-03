@@ -55,6 +55,20 @@ export default function AdminFaceVerificationPage() {
   };
 
   const getStatusBadge = (v) => {
+    // Admin review takes priority over matchResult
+    if (v.adminReviewed) {
+      return v.adminApproved ? (
+        <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
+          <CheckCircle className="w-3 h-3" />
+          {t('studentProfile.approved')}
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 text-xs font-medium rounded-full">
+          <XCircle className="w-3 h-3" />
+          {t('reports.rejected')}
+        </span>
+      );
+    }
     if (v.matchResult) {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
@@ -63,23 +77,10 @@ export default function AdminFaceVerificationPage() {
         </span>
       );
     }
-    if (!v.adminReviewed) {
-      return (
-        <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 text-xs font-medium rounded-full">
-          <Clock className="w-3 h-3" />
-          {t('reports.pending')}
-        </span>
-      );
-    }
-    return v.adminApproved ? (
-      <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 text-xs font-medium rounded-full">
-        <CheckCircle className="w-3 h-3" />
-        {t('studentProfile.approved')}
-      </span>
-    ) : (
-      <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 text-xs font-medium rounded-full">
-        <XCircle className="w-3 h-3" />
-        {t('reports.rejected')}
+    return (
+      <span className="inline-flex items-center gap-1 px-2 py-1 bg-yellow-100 text-yellow-700 text-xs font-medium rounded-full">
+        <Clock className="w-3 h-3" />
+        {t('reports.pending')}
       </span>
     );
   };

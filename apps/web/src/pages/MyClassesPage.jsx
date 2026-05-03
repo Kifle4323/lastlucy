@@ -12,7 +12,9 @@ import {
   User,
   FileText,
   Calendar,
-  MapPin
+  MapPin,
+  CheckCircle,
+  Clock
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -96,8 +98,11 @@ export default function MyClassesPage() {
                   {/* Classes with Course Sections - Always visible */}
                   {Array.from(classMap.values()).map(({ class: cls, sections: classSections }) => (
                     <div key={cls.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-                      {/* Class Header */}
-                      <div className="p-5 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                      {/* Class Header - clickable */}
+                      <Link
+                        to={`/courses/${classSections[0]?.courseId}?sectionId=${classSections[0]?.id}`}
+                        className="block p-5 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                      >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
                             <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
@@ -118,28 +123,52 @@ export default function MyClassesPage() {
                               </div>
                             </div>
                           </div>
-                          <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm font-medium rounded-full">
-                            {classSections.length} {classSections.length !== 1 ? t('addDrop.courses') : t('myClasses.course')}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm font-medium rounded-full">
+                              {classSections.length} {classSections.length !== 1 ? t('addDrop.courses') : t('myClasses.course')}
+                            </span>
+                            <ChevronRight className="w-5 h-5 text-gray-400" />
+                          </div>
                         </div>
-                      </div>
+                      </Link>
 
                       {/* Course Sections - Always visible */}
                       <div className="p-5">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                          {classSections.map((section) => (
+                          {classSections.map((section) => {
+                            const isCompleted = section.allGradesSubmitted;
+                            const isCurrent = !section.allGradesSubmitted && section.isCurrentSemester;
+                            return (
                             <div 
                               key={section.id} 
-                              className="p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg hover:shadow-md transition-shadow"
+                              className={`p-4 border rounded-lg hover:shadow-md transition-shadow ${
+                                isCompleted 
+                                  ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 opacity-75' 
+                                  : isCurrent 
+                                    ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800' 
+                                    : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700'
+                              }`}
                             >
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex items-center gap-2">
-                                  <BookOpen className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                                  <span className="font-medium text-gray-900 dark:text-white">{section.course?.title}</span>
+                                  <BookOpen className={`w-5 h-5 ${isCompleted ? 'text-gray-400 dark:text-gray-500' : 'text-primary-600 dark:text-primary-400'}`} />
+                                  <span className={`font-medium ${isCompleted ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-white'}`}>{section.course?.title}</span>
                                 </div>
-                                <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
-                                  {section.sectionCode}
-                                </span>
+                                <div className="flex items-center gap-1">
+                                  {isCompleted && (
+                                    <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 text-xs font-medium rounded flex items-center gap-1">
+                                      <CheckCircle className="w-3 h-3" /> {t('myClasses.completed')}
+                                    </span>
+                                  )}
+                                  {isCurrent && (
+                                    <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-medium rounded flex items-center gap-1">
+                                      <Clock className="w-3 h-3" /> {t('myClasses.current')}
+                                    </span>
+                                  )}
+                                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
+                                    {section.sectionCode}
+                                  </span>
+                                </div>
                               </div>
                               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{section.course?.code}</p>
                               
@@ -160,9 +189,10 @@ export default function MyClassesPage() {
                                 </div>
                               </div>
 
+                              {!isCompleted ? (
                               <div className="flex flex-wrap gap-2">
                                 <Link
-                                  to={`/courses/${section.courseId}`}
+                                  to={`/courses/${section.courseId}?sectionId=${section.id}`}
                                   className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-xs font-medium rounded hover:bg-primary-700 transition-colors"
                                 >
                                   <FileText className="w-3 h-3" />
@@ -176,8 +206,20 @@ export default function MyClassesPage() {
                                   {t('nav.gradebook')}
                                 </Link>
                               </div>
+                              ) : (
+                              <div className="flex flex-wrap gap-2">
+                                <Link
+                                  to={`/teacher/grades?section=${section.id}`}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
+                                >
+                                  <CheckCircle className="w-3 h-3" />
+                                  {t('myClasses.viewResults')}
+                                </Link>
+                              </div>
+                              )}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -191,19 +233,40 @@ export default function MyClassesPage() {
                         {t('myClasses.otherCourseSections')}
                       </h2>
                       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                        {sectionsWithoutClass.map((section) => (
+                        {sectionsWithoutClass.map((section) => {
+                          const isCompleted = section.allGradesSubmitted;
+                          const isCurrent = !section.allGradesSubmitted && section.isCurrentSemester;
+                          return (
                           <div 
                             key={section.id} 
-                            className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-5 hover:shadow-md transition-shadow"
+                            className={`rounded-xl shadow-sm border p-5 hover:shadow-md transition-shadow ${
+                              isCompleted 
+                                ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 opacity-75' 
+                                : isCurrent 
+                                  ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800' 
+                                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700'
+                            }`}
                           >
                             <div className="flex items-start justify-between mb-3">
                               <div>
-                                <h3 className="font-semibold text-gray-900 dark:text-white">{section.course?.title}</h3>
+                                <h3 className={`font-semibold ${isCompleted ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-white'}`}>{section.course?.title}</h3>
                                 <p className="text-sm text-gray-500 dark:text-gray-400">{section.course?.code}</p>
                               </div>
-                              <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
-                                {section.sectionCode}
-                              </span>
+                              <div className="flex items-center gap-1">
+                                {isCompleted && (
+                                  <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 text-xs font-medium rounded flex items-center gap-1">
+                                    <CheckCircle className="w-3 h-3" /> {t('myClasses.completed')}
+                                  </span>
+                                )}
+                                {isCurrent && (
+                                  <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-medium rounded flex items-center gap-1">
+                                    <Clock className="w-3 h-3" /> {t('myClasses.current')}
+                                  </span>
+                                )}
+                                <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
+                                  {section.sectionCode}
+                                </span>
+                              </div>
                             </div>
                             
                             <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400 mb-4">
@@ -229,9 +292,10 @@ export default function MyClassesPage() {
                               </div>
                             </div>
 
+                            {!isCompleted ? (
                             <div className="flex flex-wrap gap-2">
                               <Link
-                                to={`/courses/${section.courseId}`}
+                                to={`/courses/${section.courseId}?sectionId=${section.id}`}
                                 className="inline-flex items-center gap-1 px-3 py-1.5 bg-primary-600 text-white text-xs font-medium rounded hover:bg-primary-700 transition-colors"
                               >
                                 <BookOpen className="w-3 h-3" />
@@ -245,8 +309,20 @@ export default function MyClassesPage() {
                                 {t('nav.gradebook')}
                               </Link>
                             </div>
+                            ) : (
+                            <div className="flex flex-wrap gap-2">
+                              <Link
+                                to={`/teacher/grades?section=${section.id}`}
+                                className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
+                              >
+                                <CheckCircle className="w-3 h-3" />
+                                {t('myClasses.viewResults')}
+                              </Link>
+                            </div>
+                            )}
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   )}
@@ -294,8 +370,11 @@ export default function MyClassesPage() {
                   {/* Classes with Courses - Always visible */}
                   {Array.from(classMap.values()).map(({ class: cls, enrollments: classEnrollments }) => (
                     <div key={cls.id} className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 overflow-hidden mb-6">
-                      {/* Class Header */}
-                      <div className="p-5 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                      {/* Class Header - clickable */}
+                      <Link
+                        to={`/courses/${classEnrollments[0]?.courseSection?.courseId}`}
+                        className="block p-5 border-b border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 hover:bg-gray-100 dark:hover:bg-gray-700/50 transition-colors cursor-pointer"
+                      >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-4">
                             <div className="p-3 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
@@ -316,28 +395,52 @@ export default function MyClassesPage() {
                               </div>
                             </div>
                           </div>
-                          <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm font-medium rounded-full">
-                            {classEnrollments.length} {classEnrollments.length !== 1 ? t('addDrop.courses') : t('myClasses.course')}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="px-3 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-sm font-medium rounded-full">
+                              {classEnrollments.length} {classEnrollments.length !== 1 ? t('addDrop.courses') : t('myClasses.course')}
+                            </span>
+                            <ChevronRight className="w-5 h-5 text-gray-400" />
+                          </div>
                         </div>
-                      </div>
+                      </Link>
 
                       {/* Courses - Always visible */}
                       <div className="p-5">
                         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                          {classEnrollments.map((enrollment) => (
+                          {classEnrollments.map((enrollment) => {
+                            const isCompleted = enrollment.gradeSubmitted;
+                            const isCurrent = !enrollment.isPastSemester && !enrollment.gradeSubmitted;
+                            return (
                             <div 
                               key={enrollment.id} 
-                              className="p-4 bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-lg hover:shadow-md transition-shadow"
+                              className={`p-4 border rounded-lg hover:shadow-md transition-shadow ${
+                                isCompleted 
+                                  ? 'bg-gray-100 dark:bg-gray-800 border-gray-300 dark:border-gray-600 opacity-75' 
+                                  : isCurrent 
+                                    ? 'bg-green-50 dark:bg-green-900/10 border-green-200 dark:border-green-800' 
+                                    : 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700'
+                              }`}
                             >
                               <div className="flex items-start justify-between mb-2">
                                 <div className="flex items-center gap-2">
-                                  <BookOpen className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-                                  <span className="font-medium text-gray-900 dark:text-white">{enrollment.courseSection?.course?.title}</span>
+                                  <BookOpen className={`w-5 h-5 ${isCompleted ? 'text-gray-400 dark:text-gray-500' : 'text-primary-600 dark:text-primary-400'}`} />
+                                  <span className={`font-medium ${isCompleted ? 'text-gray-500 dark:text-gray-400' : 'text-gray-900 dark:text-white'}`}>{enrollment.courseSection?.course?.title}</span>
                                 </div>
-                                <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
-                                  {enrollment.courseSection?.sectionCode}
-                                </span>
+                                <div className="flex items-center gap-1">
+                                  {isCompleted && (
+                                    <span className="px-2 py-0.5 bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400 text-xs font-medium rounded flex items-center gap-1">
+                                      <CheckCircle className="w-3 h-3" /> {t('myClasses.completed')}
+                                    </span>
+                                  )}
+                                  {isCurrent && (
+                                    <span className="px-2 py-0.5 bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-medium rounded flex items-center gap-1">
+                                      <Clock className="w-3 h-3" /> {t('myClasses.current')}
+                                    </span>
+                                  )}
+                                  <span className="px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 text-xs font-medium rounded">
+                                    {enrollment.courseSection?.sectionCode}
+                                  </span>
+                                </div>
                               </div>
                               <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">{enrollment.courseSection?.course?.code}</p>
                               
@@ -360,6 +463,7 @@ export default function MyClassesPage() {
                                 )}
                               </div>
 
+                              {!isCompleted ? (
                               <div className="flex flex-wrap gap-2">
                                 <Link
                                   to={`/student/results`}
@@ -376,8 +480,20 @@ export default function MyClassesPage() {
                                   {t('myClasses.takeAssessments')}
                                 </Link>
                               </div>
+                              ) : (
+                              <div className="flex flex-wrap gap-2">
+                                <Link
+                                  to={`/student/results`}
+                                  className="inline-flex items-center gap-1 px-3 py-1.5 bg-gray-500 text-white text-xs font-medium rounded hover:bg-gray-600 transition-colors"
+                                >
+                                  <FileText className="w-3 h-3" />
+                                  {t('myClasses.viewResults')}
+                                </Link>
+                              </div>
+                              )}
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     </div>

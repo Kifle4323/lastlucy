@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import { useTranslation } from 'react-i18next';
-import { getClasses, getAdminAnalytics, getTeacherAnalytics, getStudentAnalytics, getMLAnalytics, predictStudentPerformance } from '../api';
+import { getClasses, getAdminAnalytics, getTeacherAnalytics, getTeacherAtRiskStudents, getStudentAnalytics, getMLAnalytics, predictStudentById } from '../api';
 import Layout from '../components/Layout';
 import {
   GraduationCap, BookOpen, Users, Calendar, ChevronRight, Clock, User,
   ClipboardList, Award, FileText, CalendarClock, TrendingUp, Activity,
-  BarChart3, Eye, CheckCircle, AlertCircle, Brain
+  BarChart3, Eye, CheckCircle, AlertCircle, AlertTriangle, Brain
 } from 'lucide-react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
@@ -32,7 +32,11 @@ function StatCard({ icon: Icon, iconBg, iconColor, value, label, sub }) {
 
 function AdminAnalytics({ data, t }) {
   if (!data) return null;
-  const { users, content, activity, grades, attendance } = data;
+  const users = data.users || { total: 0, students: 0, teachers: 0, admins: 0, recentRegistrations: 0, pendingProfiles: 0 };
+  const content = data.content || { courses: 0, classes: 0, materials: 0, assessments: 0 };
+  const activity = data.activity || { enrollments: 0, attempts: 0, materialViews: 0, liveSessions: 0, activeSessions: 0 };
+  const grades = data.grades || { averageGPA: null, distribution: {} };
+  const attendance = data.attendance || { averageScore: 0, totalRecords: 0 };
 
   const roleData = [
     { name: 'Students', value: users.students },
@@ -169,9 +173,16 @@ function AdminAnalytics({ data, t }) {
   );
 }
 
-function TeacherAnalytics({ data, mlAnalytics, t }) {
+function TeacherAnalytics({ data, mlAnalytics, atRiskStudents, t }) {
   if (!data) return null;
-  const { totalCourses, totalStudents, avgGrade, avgAttendance, liveSessions, activeSessions, materialViews, sections } = data;
+  const totalCourses = data.totalCourses ?? 0;
+  const totalStudents = data.totalStudents ?? 0;
+  const avgGrade = data.avgGrade ?? 'N/A';
+  const avgAttendance = data.avgAttendance ?? 0;
+  const liveSessions = data.liveSessions ?? 0;
+  const activeSessions = data.activeSessions ?? 0;
+  const materialViews = data.materialViews ?? 0;
+  const sections = data.sections || [];
 
   const sectionChartData = (sections || []).map(s => ({
     name: s.courseCode || s.courseTitle?.substring(0, 8),
@@ -233,47 +244,82 @@ function TeacherAnalytics({ data, mlAnalytics, t }) {
         </div>
       )}
 
-      {/* At-Risk Students (AI) */}
-      {mlAnalytics?.at_risk_students?.length > 0 && (
+      {/* At-Risk Students (Real DB Data) */}
+      {atRiskStudents?.length > 0 && (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-8">
           <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-red-600" />
-            {t('dashboard.atRiskStudents')} ({mlAnalytics.at_risk_students.length})
+            {t('dashboard.atRiskStudents')} ({atRiskStudents.length})
           </h3>
           <p className="text-xs text-gray-500 mb-4">{t('dashboard.atRiskDesc')}</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-200">
-                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.studentId')}</th>
-                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.finalScore')}</th>
+                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.studentName')}</th>
+                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.course')}</th>
+                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.score')}</th>
                   <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.attendance')}</th>
-                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.courseType')}</th>
+                  <th className="text-left px-3 py-2 text-gray-500">AI Pass%</th>
                   <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.riskLevel')}</th>
+                  <th className="text-left px-3 py-2 text-gray-500">{t('dashboard.reason')}</th>
                 </tr>
               </thead>
               <tbody>
-                {mlAnalytics.at_risk_students.slice(0, 10).map((s, i) => (
+                {atRiskStudents.slice(0, 15).map((s, i) => (
                   <tr key={i} className="border-b border-gray-100">
-                    <td className="px-3 py-2 font-mono text-xs">#{s.student_id}</td>
-                    <td className="px-3 py-2">{s.final_score}</td>
-                    <td className="px-3 py-2">{s.attendance}</td>
                     <td className="px-3 py-2">
-                      <span className="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-700">{(s.course_type || '').toUpperCase()}</span>
+                      <div>
+                        <p className="font-medium text-gray-900">{s.studentName}</p>
+                        <p className="text-xs text-gray-400">{s.studentEmail}</p>
+                      </div>
                     </td>
                     <td className="px-3 py-2">
-                      <span className={'px-2 py-1 rounded text-xs font-medium ' + (s.risk_level === 'HIGH' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700')}>
-                        {s.risk_level}
+                      <div>
+                        <p className="text-gray-900">{s.courseTitle}</p>
+                        <p className="text-xs text-gray-400">{s.courseCode} - {s.sectionCode}</p>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.displayScore !== null && s.displayScore !== undefined ? (
+                        <span className="text-gray-900 font-semibold">{s.displayScore?.toFixed(1)}%</span>
+                      ) : s.totalScore !== null && s.totalScore !== undefined ? (
+                        <span className="text-gray-900 font-semibold">{s.totalScore?.toFixed(1)}</span>
+                      ) : s.avgAttemptScore !== null && s.avgAttemptScore !== undefined ? (
+                        <span className="text-orange-600 font-semibold">{s.avgAttemptScore?.toFixed(1)}%</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.attendanceScore !== null && s.attendanceScore !== undefined ? (
+                        <span className={s.attendanceScore < 60 ? 'text-red-600 font-semibold' : 'text-gray-900'}>
+                          {s.attendanceScore}%
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {s.passProbability != null ? (
+                        <span className={`font-semibold ${s.passProbability >= 0.5 ? 'text-green-600' : s.passProbability >= 0.3 ? 'text-yellow-600' : 'text-red-600'}`}>
+                          {(s.passProbability * 100).toFixed(1)}%
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={'px-2 py-1 rounded text-xs font-medium ' + (s.riskLevel === 'HIGH' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700')}>
+                        {s.riskLevel}
                       </span>
                     </td>
+                    <td className="px-3 py-2 text-xs text-gray-500">{s.reason || '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <Link to="/performance" className="mt-4 inline-flex items-center gap-1 text-sm text-indigo-600 hover:underline">
-            {t('dashboard.viewFullAnalytics')} <ChevronRight className="w-4 h-4" />
-          </Link>
         </div>
       )}
     </>
@@ -282,7 +328,14 @@ function TeacherAnalytics({ data, mlAnalytics, t }) {
 
 function StudentAnalytics({ data, mlPredictions, t }) {
   if (!data) return null;
-  const { totalCourses, gpa, avgAttendance, avgAssessmentScore, readingProgress, totalAttempts, courses, upcomingExams } = data;
+  const totalCourses = data.totalCourses ?? 0;
+  const gpa = data.gpa ?? 'N/A';
+  const avgAttendance = data.avgAttendance ?? 0;
+  const avgAssessmentScore = data.avgAssessmentScore ?? 0;
+  const readingProgress = data.readingProgress || { total: 0, completed: 0 };
+  const totalAttempts = data.totalAttempts ?? 0;
+  const courses = data.courses || [];
+  const upcomingExams = data.upcomingExams || [];
 
   const courseGradeData = (courses || []).filter(c => c.grade !== null).map(c => ({
     name: c.courseCode || c.courseTitle?.substring(0, 8),
@@ -359,8 +412,43 @@ function StudentAnalytics({ data, mlPredictions, t }) {
           {t('dashboard.aiPassProbability')}
         </h3>
         <p className="text-xs text-gray-500 mb-4">{t('dashboard.aiPassProbabilityDesc')}</p>
+        {mlPredictions?.expected_cgpa != null && (
+          <div className="grid grid-cols-3 gap-3 mb-4">
+            <div className="p-3 bg-indigo-50 rounded-lg text-center">
+              <p className="text-xs text-indigo-500 font-medium">{t('dashboard.currentCgpa')}</p>
+              <p className="text-xl font-bold text-indigo-600">{(mlPredictions.current_cgpa ?? 0).toFixed(2)}</p>
+              <p className="text-xs text-indigo-400">/ 4.00</p>
+            </div>
+            <div className="p-3 bg-blue-50 rounded-lg text-center">
+              <p className="text-xs text-blue-500 font-medium">{t('dashboard.expectedCgpa')}</p>
+              <p className="text-xl font-bold text-blue-600">{(mlPredictions.expected_cgpa ?? 0).toFixed(2)}</p>
+              <p className="text-xs text-blue-400">/ 4.00</p>
+            </div>
+            <div className={`p-3 rounded-lg text-center ${
+              mlPredictions.dropout_risk === 'CRITICAL' ? 'bg-red-50' :
+              mlPredictions.dropout_risk === 'HIGH' ? 'bg-orange-50' :
+              mlPredictions.dropout_risk === 'MODERATE' ? 'bg-yellow-50' : 'bg-green-50'
+            }`}>
+              <p className={`text-xs font-medium ${
+                mlPredictions.dropout_risk === 'CRITICAL' ? 'text-red-500' :
+                mlPredictions.dropout_risk === 'HIGH' ? 'text-orange-500' :
+                mlPredictions.dropout_risk === 'MODERATE' ? 'text-yellow-600' : 'text-green-500'
+              }`}>{t('dashboard.dropoutRisk')}</p>
+              <p className={`text-lg font-bold ${
+                mlPredictions.dropout_risk === 'CRITICAL' ? 'text-red-600' :
+                mlPredictions.dropout_risk === 'HIGH' ? 'text-orange-600' :
+                mlPredictions.dropout_risk === 'MODERATE' ? 'text-yellow-600' : 'text-green-600'
+              }`}>{mlPredictions.dropout_risk}</p>
+              <p className={`text-xs ${
+                mlPredictions.dropout_risk === 'CRITICAL' ? 'text-red-400' :
+                mlPredictions.dropout_risk === 'HIGH' ? 'text-orange-400' :
+                mlPredictions.dropout_risk === 'MODERATE' ? 'text-yellow-500' : 'text-green-400'
+              }`}>{t(`dashboard.destination_${mlPredictions.destination}`)}</p>
+            </div>
+          </div>
+        )}
         <div className="grid gap-3 md:grid-cols-2">
-          {(mlPredictions || []).map((p, i) => (
+          {(mlPredictions?.predictions || []).map((p, i) => (
             <div key={i} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
               <div>
                 <p className="font-medium text-gray-900">{p.course_title}</p>
@@ -377,7 +465,7 @@ function StudentAnalytics({ data, mlPredictions, t }) {
               </div>
             </div>
           ))}
-          {(!mlPredictions || mlPredictions.length === 0) && <p className="text-gray-400 text-center py-4 col-span-2">{t('dashboard.noPredictionsYet')}</p>}
+          {(!mlPredictions?.predictions || mlPredictions.predictions.length === 0) && <p className="text-gray-400 text-center py-4 col-span-2">{data?.courses?.length > 0 ? t('dashboard.predictionError') : t('dashboard.noPredictionsYet')}</p>}
         </div>
       </div>
 
@@ -417,6 +505,7 @@ export default function DashboardPage() {
   const [analytics, setAnalytics] = useState(null);
   const [mlAnalytics, setMLAnalytics] = useState(null);
   const [mlPredictions, setMLPredictions] = useState(null);
+  const [atRiskStudents, setAtRiskStudents] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -429,63 +518,25 @@ export default function DashboardPage() {
       Promise.resolve(null),
       // ML analytics for teacher/admin
       (user?.role === 'TEACHER' || user?.role === 'ADMIN') ? getMLAnalytics().catch(() => null) : Promise.resolve(null),
+      // Real at-risk students for teacher
+      user?.role === 'TEACHER' ? getTeacherAtRiskStudents().catch(() => []) : Promise.resolve([]),
     ])
-      .then(([classesData, analyticsData, mlData]) => {
+      .then(([classesData, analyticsData, mlData, atRiskData]) => {
         setClasses(classesData);
         setAnalytics(analyticsData);
         setMLAnalytics(mlData);
+        setAtRiskStudents(atRiskData || []);
 
-        // For students: predict pass probability using their analytics data
-        if (user?.role === 'STUDENT' && analyticsData) {
-          const courses = analyticsData.courses || [];
-          const readPct = analyticsData.readingProgress?.total > 0
-            ? Math.round((analyticsData.readingProgress.completed / analyticsData.readingProgress.total) * 100)
-            : 0;
-          Promise.all(courses.map(c => {
-            const totalGrade = c.grade || 0;
-            // Map deliveryMode: PAPER → f2f, ONLINE → online
-            const dm = (c.deliveryMode || 'ONLINE').toUpperCase();
-            const courseType = dm === 'PAPER' ? 'f2f' : 'online';
-            const hasMaterials = (c.materials || 0) > 0;
-
-            // The ML model expects all features on 0-100 scale.
-            // Grade components (quizScore, assignmentScore, etc.) are on their own scales
-            // (e.g., quiz out of 30, assignment out of 20) — NOT 0-100.
-            // totalScore is the only reliable 0-100 value, so use it as the primary signal.
-            // Attendance from analytics is on 0-10 scale, multiply by 10.
-            const attScore = analyticsData.avgAttendance > 15
-              ? analyticsData.avgAttendance
-              : Math.min(100, Math.round(analyticsData.avgAttendance * 10));
-
-            // If totalGrade exists (0-100 scale), use it for all score features
-            // If not, try to use individual scores only if they look like 0-100 scale (>50)
-            const scoreSignal = totalGrade > 0 ? totalGrade : 50;
-            const tryUse = (val) => (val != null && val > 50) ? val : scoreSignal;
-
-            // Participation = attendance + engagement proxy
-            // No direct "participation" field in DB; combine attendance with material engagement
-            const videoWatch = c.videoWatchPct ?? (hasMaterials && courseType === 'online' ? Math.min(100, readPct * 0.8 + 20) : 0);
-            const readingPct = c.readingPct ?? (hasMaterials && courseType === 'online' ? readPct : 0);
-            const engagementPct = Math.round((videoWatch + readingPct) / 2);
-            const participationScore = Math.min(100, Math.round(attScore * 0.5 + engagementPct * 0.5));
-
-            const features = {
-              attendance: c.attendanceScore != null && c.attendanceScore > 50 ? c.attendanceScore : attScore,
-              quiz_score: tryUse(c.quizScore),
-              participation: participationScore,
-              video_watch: videoWatch,
-              ppt_progress: readingPct,
-              has_video: hasMaterials && courseType === 'online' ? 1 : 0,
-              has_ppt: hasMaterials && courseType === 'online' ? 1 : 0,
-              assignment_score: tryUse(c.assignmentScore),
-              course_type: courseType,
-            };
-            return predictStudentPerformance(features)
-              .then(pred => ({ ...pred, course_title: c.courseTitle, course_code: c.courseCode }))
-              .catch(() => null);
-          })).then(preds => {
-            setMLPredictions(preds.filter(Boolean));
-          });
+        // For students: predict pass probability using predictStudentById (same as Performance page)
+        if (user?.role === 'STUDENT' && user?.id) {
+          predictStudentById(user.id)
+            .then(predData => {
+              setMLPredictions(predData || { predictions: [], current_cgpa: 0, expected_cgpa: 0 });
+            })
+            .catch(err => {
+              console.error('ML predict-student failed:', err);
+              setMLPredictions({ predictions: [], current_cgpa: 0, expected_cgpa: 0 });
+            });
         }
       })
       .finally(() => setLoading(false));
@@ -510,7 +561,7 @@ export default function DashboardPage() {
 
         {/* Analytics by Role */}
         {user?.role === 'ADMIN' && <AdminAnalytics data={analytics} t={t} />}
-        {user?.role === 'TEACHER' && <TeacherAnalytics data={analytics} t={t} mlAnalytics={mlAnalytics} />}
+        {user?.role === 'TEACHER' && <TeacherAnalytics data={analytics} t={t} mlAnalytics={mlAnalytics} atRiskStudents={atRiskStudents} />}
         {user?.role === 'STUDENT' && <StudentAnalytics data={analytics} mlPredictions={mlPredictions} t={t} />}
 
         {/* Quick Actions */}

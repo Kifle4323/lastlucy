@@ -263,9 +263,9 @@ export function registerGradebookRoutes(router: Router) {
       where: { courseId: params.courseId },
     }) || { quizWeight: 15, assignmentWeight: 10, midtermWeight: 25, finalWeight: 40, attendanceWeight: 10 };
 
-    // Get students enrolled in this teacher's course sections
+    // Get students enrolled in this teacher's course sections only
     const sections = await prisma.courseSection.findMany({
-      where: { courseId: params.courseId },
+      where: { courseId: params.courseId, teacherId: req.user!.id },
       include: {
         class: true,
         enrollments: {
@@ -275,9 +275,9 @@ export function registerGradebookRoutes(router: Router) {
       },
     });
 
-    // Also get students from course classes
+    // Also get students from course classes (only this teacher's)
     const courseClasses = await prisma.courseClass.findMany({
-      where: { courseId: params.courseId },
+      where: { courseId: params.courseId, teacherId: req.user!.id },
       include: {
         class: {
           include: {
@@ -336,11 +336,13 @@ export function registerGradebookRoutes(router: Router) {
           where: { status: 'GRADED' },
           include: { student: { select: { id: true } } },
         },
+        manualGrades: true,
       },
     });
 
     // Define types for the assessment data
     type AttemptType = { studentId: string; status: string; score: number | null };
+    type ManualGradeType = { studentId: string; score: number };
     type AssessmentType = {
       id: string;
       title: string;
@@ -348,6 +350,7 @@ export function registerGradebookRoutes(router: Router) {
       maxScore: number | null;
       questions: unknown[];
       attempts: AttemptType[];
+      manualGrades: ManualGradeType[];
     };
     const typedAssessments = assessments as AssessmentType[];
 
@@ -389,14 +392,22 @@ export function registerGradebookRoutes(router: Router) {
               if (attempt && attempt.score !== null && assessment.maxScore) {
                 score += (attempt.score / assessment.maxScore) * 100;
                 count++;
+              } else {
+                const manualGrade = assessment.manualGrades?.find(mg => mg.studentId === student.id);
+                if (manualGrade && assessment.maxScore) {
+                  score += (manualGrade.score / assessment.maxScore) * 100;
+                  count++;
+                }
               }
             }
-            const avg = count > 0 ? score / count : 0;
-            const percent = Math.round(avg * 10) / 10;
-            const mark = Math.round(avg * component.weight / 100 * 10) / 10;
-            componentMarks[component.id] = mark;
-            componentPercentages[component.id] = percent;
-            totalGrade += mark;
+            if (count > 0) {
+              const avg = score / count;
+              const percent = Math.round(avg * 10) / 10;
+              const mark = Math.round(avg * component.weight / 100 * 10) / 10;
+              componentMarks[component.id] = mark;
+              componentPercentages[component.id] = percent;
+              totalGrade += mark;
+            }
           } else {
             // No assessments linked yet - match by examType to component name
             const examTypeMap: Record<string, string[]> = {
@@ -415,7 +426,7 @@ export function registerGradebookRoutes(router: Router) {
               matchingTypes.includes(a.examType)
             );
 
-            let legacyScore = 0;
+            let legacyScore: number | null = null;
             if (nameMatch.length > 0) {
               let score = 0, count = 0;
               for (const assessment of nameMatch) {
@@ -423,15 +434,25 @@ export function registerGradebookRoutes(router: Router) {
                 if (attempt && attempt.score !== null && assessment.maxScore) {
                   score += (attempt.score / assessment.maxScore) * 100;
                   count++;
+                } else {
+                  const manualGrade = assessment.manualGrades?.find(mg => mg.studentId === student.id);
+                  if (manualGrade && assessment.maxScore) {
+                    score += (manualGrade.score / assessment.maxScore) * 100;
+                    count++;
+                  }
                 }
               }
-              legacyScore = count > 0 ? score / count : 0;
+              if (count > 0) {
+                legacyScore = score / count;
+              }
             }
-            const percent = Math.round(legacyScore * 10) / 10;
-            const mark = Math.round(legacyScore * component.weight / 100 * 10) / 10;
-            componentMarks[component.id] = mark;
-            componentPercentages[component.id] = percent;
-            totalGrade += mark;
+            if (legacyScore !== null) {
+              const percent = Math.round(legacyScore * 10) / 10;
+              const mark = Math.round(legacyScore * component.weight / 100 * 10) / 10;
+              componentMarks[component.id] = mark;
+              componentPercentages[component.id] = percent;
+              totalGrade += mark;
+            }
           }
         }
       }
@@ -477,10 +498,14 @@ export function registerGradebookRoutes(router: Router) {
         attempts: {
           where: { studentId: req.user!.id },
         },
+        manualGrades: {
+          where: { studentId: req.user!.id },
+        },
       },
     });
 
     type StudentAttemptType = { studentId: string; status: string; score: number | null };
+    type StudentManualGradeType = { studentId: string; score: number };
     type StudentAssessmentType = {
       id: string;
       title: string;
@@ -489,6 +514,7 @@ export function registerGradebookRoutes(router: Router) {
       componentId: string | null;
       questions: unknown[];
       attempts: StudentAttemptType[];
+      manualGrades: StudentManualGradeType[];
     };
     const typedAssessments = assessments as StudentAssessmentType[];
 
@@ -526,14 +552,24 @@ export function registerGradebookRoutes(router: Router) {
             score += percent;
             count++;
             details.push({ title: assessment.title, score: attempt.score, maxScore: assessment.maxScore, percent: Math.round(percent * 10) / 10 });
+          } else {
+            const manualGrade = assessment.manualGrades?.find(mg => mg.studentId === req.user!.id);
+            if (manualGrade && assessment.maxScore) {
+              const percent = (manualGrade.score / assessment.maxScore) * 100;
+              score += percent;
+              count++;
+              details.push({ title: assessment.title, score: manualGrade.score, maxScore: assessment.maxScore, percent: Math.round(percent * 10) / 10, isPaper: true });
+            }
           }
         }
 
-        const avg = count > 0 ? score / count : 0;
-        const mark = Math.round(avg * component.weight / 100 * 10) / 10;
-        componentMarks[component.id] = mark;
+        if (count > 0) {
+          const avg = score / count;
+          const mark = Math.round(avg * component.weight / 100 * 10) / 10;
+          componentMarks[component.id] = mark;
+          totalGrade += mark;
+        }
         componentDetails[component.id] = details;
-        totalGrade += mark;
       }
     }
 

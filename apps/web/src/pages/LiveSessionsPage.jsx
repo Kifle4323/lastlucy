@@ -321,7 +321,7 @@ export default function LiveSessionsPage() {
                   >
                     <option value="">{t('liveSession.selectClassCourse')}</option>
                     {teacherCourses.map(tc => (
-                      <option key={`${tc.classId}:${tc.courseId}`} value={`${tc.classId}:${tc.courseId}`}>
+                      <option key={tc.courseSectionId} value={`${tc.classId}:${tc.courseId}`}>
                         {tc.className} - {tc.courseTitle}
                       </option>
                     ))}

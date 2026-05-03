@@ -4,6 +4,16 @@ import { z } from 'zod';
 import { prisma } from '../db';
 import { authRequired, requireRole, type AuthedRequest } from '../middleware';
 
+// Helper: Check if a course's semester (via its course sections) is IN_PROGRESS or GRADING
+async function requireCourseSemesterInProgress(courseId: string): Promise<{ allowed: boolean; semesterStatus?: string }> {
+  const section = await prisma.courseSection.findFirst({
+    where: { courseId },
+    include: { semester: { select: { id: true, status: true } } },
+  });
+  if (!section || !section.semester) return { allowed: false };
+  return { allowed: section.semester.status === 'IN_PROGRESS' || section.semester.status === 'GRADING', semesterStatus: section.semester.status };
+}
+
 // Simple text similarity helpers (Levenshtein distance based)
 function normalizeText(s: string | null | undefined) {
   if (!s) return '';
@@ -47,7 +57,7 @@ export function registerAssessmentRoutes(router: Router) {
       const body = z.object({
         title: z.string().min(2),
         examType: z.enum(['QUIZ', 'MIDTERM', 'FINAL', 'ASSIGNMENT']).optional(),
-        deliveryMode: z.enum(['ONLINE', 'PAPER']).optional(),
+        deliveryMode: z.enum(['ONLINE', 'PAPER', 'MIXED']).optional(),
         timeLimit: z.number().int().positive().optional(),
         maxScore: z.number().int().positive().optional(),
         componentId: z.string().optional(),
@@ -116,12 +126,15 @@ export function registerAssessmentRoutes(router: Router) {
 
       if (allStudentIds.length > 0) {
         const courseTitle = courseSection?.course?.title || courseClass?.course?.title || 'your course';
+        const isPaper = body.deliveryMode === 'PAPER' || body.deliveryMode === 'MIXED';
+        const isOnlineExam = body.deliveryMode === 'ONLINE_EXAM';
+        const examLabel = isPaper ? 'paper ' + (body.examType?.toLowerCase() || 'exam') : isOnlineExam ? 'online ' + (body.examType?.toLowerCase() || 'exam') : (body.examType?.toLowerCase() || 'quiz');
         await prisma.notification.createMany({
           data: allStudentIds.map(studentId => ({
             userId: studentId,
             type: 'NEW_ASSESSMENT',
-            title: 'New Assessment Available',
-            message: `A new ${body.examType?.toLowerCase() || 'quiz'} "${body.title}" has been created for ${courseTitle}.`,
+            title: isPaper ? 'Paper Exam Scheduled' : isOnlineExam ? 'Online Exam Scheduled' : 'New Assessment Available',
+            message: `A ${examLabel} "${body.title}" has been scheduled for ${courseTitle}.${isPaper ? ' This is a paper-based exam — your teacher will enter your results after the exam.' : isOnlineExam ? ' This is a proctored online exam — make sure you are ready before starting.' : ''}`,
           })),
         });
       }
@@ -433,6 +446,15 @@ export function registerAssessmentRoutes(router: Router) {
       return;
     }
 
+    // Check semester is IN_PROGRESS before allowing assessment open
+    if (body.isOpen) {
+      const { allowed, semesterStatus } = await requireCourseSemesterInProgress(assessment.courseId);
+      if (!allowed) {
+        res.status(403).json({ error: 'Semester not in progress', message: `Cannot open assessment. Semester status is ${semesterStatus || 'unknown'}. Wait for admin to start the semester.`, semesterStatus });
+        return;
+      }
+    }
+
     // If opening the exam, validate that total question points match maxScore
     if (body.isOpen) {
       const totalPoints = assessment.questions.reduce((sum: number, q: { points: number }) => sum + q.points, 0);
@@ -449,6 +471,26 @@ export function registerAssessmentRoutes(router: Router) {
       where: { id: params.assessmentId },
       data: { isOpen: body.isOpen },
     });
+
+    // Notify enrolled students when assessment is opened
+    if (body.isOpen) {
+      const enrollments = await prisma.studentEnrollment.findMany({
+        where: { courseSection: { courseId: assessment.courseId }, status: 'ENROLLED' },
+        select: { studentId: true },
+      });
+      if (enrollments.length > 0) {
+        const examLabel = assessment.examType === 'MIDTERM' ? 'Midterm' : assessment.examType === 'FINAL' ? 'Final' : assessment.examType === 'QUIZ' ? 'Quiz' : assessment.examType === 'ASSIGNMENT' ? 'Assignment' : 'Assessment';
+        await prisma.notification.createMany({
+          data: enrollments.map(e => ({
+            userId: e.studentId,
+            type: 'ASSESSMENT_OPENED',
+            title: `${examLabel} Now Available`,
+            message: `"${assessment.title}" is now open. You can start your ${examLabel.toLowerCase()} now.`,
+            data: { assessmentId: assessment.id, courseId: assessment.courseId },
+          })),
+        });
+      }
+    }
 
     res.json(updated);
   });
@@ -621,6 +663,13 @@ export function registerAssessmentRoutes(router: Router) {
     const courseClass = assessment.course.courseClasses.find((c: { teacherId: string | null }) => c.teacherId === req.user!.id);
     if (!courseSection && !courseClass) {
       res.status(403).json({ error: 'forbidden' });
+      return;
+    }
+
+    // Check semester is IN_PROGRESS
+    const { allowed, semesterStatus } = await requireCourseSemesterInProgress(assessment.courseId);
+    if (!allowed) {
+      res.status(403).json({ error: 'Semester not in progress', message: `Cannot grade. Semester status is ${semesterStatus || 'unknown'}.`, semesterStatus });
       return;
     }
 
@@ -976,6 +1025,13 @@ export function registerAssessmentRoutes(router: Router) {
 
     if (!attempt) {
       res.status(404).json({ error: 'not_found' });
+      return;
+    }
+
+    // Check semester is IN_PROGRESS
+    const { allowed, semesterStatus } = await requireCourseSemesterInProgress(attempt.assessment.courseId);
+    if (!allowed) {
+      res.status(403).json({ error: 'Semester not in progress', message: `Cannot grade attempts. Semester status is ${semesterStatus || 'unknown'}.`, semesterStatus });
       return;
     }
 

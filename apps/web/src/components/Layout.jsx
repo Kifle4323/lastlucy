@@ -23,7 +23,8 @@ import {
   Award,
   CalendarClock,
   Building2,
-  Brain
+  Brain,
+  ScrollText
 } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -49,6 +50,8 @@ export default function Layout({ children }) {
   });
   const [teacherNotifications, setTeacherNotifications] = useState({
     pendingQuestionReports: 0,
+    notifications: [],
+    unreadCount: 0,
   });
   const [studentNotifications, setStudentNotifications] = useState({
     notifications: [],
@@ -66,8 +69,15 @@ export default function Layout({ children }) {
       }
     } else if (user?.role === 'TEACHER') {
       try {
-        const data = await getTeacherQuestionReportsCount();
-        setTeacherNotifications({ pendingQuestionReports: data.pendingCount });
+        const [reportsData, notifData] = await Promise.all([
+          getTeacherQuestionReportsCount(),
+          getNotifications(),
+        ]);
+        setTeacherNotifications({
+          pendingQuestionReports: reportsData.pendingCount,
+          notifications: notifData.notifications || [],
+          unreadCount: notifData.unreadCount || 0,
+        });
       } catch (err) {
         console.error('Failed to fetch teacher notifications:', err);
       }
@@ -90,9 +100,7 @@ export default function Layout({ children }) {
 
   // Refresh notifications when location changes
   useEffect(() => {
-    if (user?.role === 'ADMIN') {
-      fetchNotifications();
-    }
+    fetchNotifications();
   }, [location.pathname, user?.role, fetchNotifications]);
 
   const handleLogout = () => {
@@ -126,7 +134,7 @@ export default function Layout({ children }) {
   };
 
   const navItems = [
-    { path: '/', label: t('nav.dashboard'), icon: Home },
+    { path: '/dashboard', label: t('nav.dashboard'), icon: Home },
     ...(user?.role === 'ADMIN' ? [
       { path: '/admin/classes', label: t('nav.classes'), icon: Users },
       { path: '/admin/users', label: t('nav.users'), icon: UserCircle },
@@ -136,15 +144,19 @@ export default function Layout({ children }) {
       { path: '/admin/face-verifications', label: t('nav.faceVerification'), icon: ScanFace },
       { path: '/admin/student-profiles', label: t('nav.studentProfiles'), icon: FileText },
       { path: '/admin/add-drop-requests', label: t('nav.addDropRequests'), icon: ClipboardList },
+      { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: ScrollText },
+      { path: '/admin/results', label: t('nav.adminResults'), icon: Award },
     ] : []),
     ...(user?.role === 'TEACHER' ? [
       { path: '/my-classes', label: t('nav.myClasses'), icon: Users },
+      { path: '/schedule', label: t('nav.schedule'), icon: Calendar },
       { path: '/teacher/grades', label: t('nav.gradeManagement'), icon: ClipboardList },
       { path: '/teacher/question-reports', label: t('nav.questionReports'), icon: FileText },
       { path: '/live-sessions', label: t('nav.liveClasses'), icon: Video },
     ] : []),
     ...(user?.role === 'STUDENT' ? [
       { path: '/my-classes', label: t('nav.myClasses'), icon: GraduationCap },
+      { path: '/schedule', label: t('nav.schedule'), icon: Calendar },
       { path: '/student/registration', label: t('nav.semesterRegistration'), icon: ClipboardList },
       { path: '/student/add-drop', label: t('nav.addDropCourses'), icon: ClipboardList },
       { path: '/student/exams', label: t('nav.examSchedule'), icon: CalendarClock },
@@ -153,7 +165,9 @@ export default function Layout({ children }) {
       { path: '/live-sessions', label: t('nav.liveClasses'), icon: Video },
       { path: '/student-profile', label: t('nav.myProfile'), icon: User },
     ] : []),
-    { path: '/performance', label: t('nav.performance'), icon: Brain },
+    ...(user?.role === 'ADMIN' ? [
+      { path: '/performance', label: t('nav.performance'), icon: Brain },
+    ] : []),
     { path: '/settings', label: t('nav.settings'), icon: Settings },
   ];
 
@@ -170,7 +184,7 @@ export default function Layout({ children }) {
       {/* Sidebar */}
       <aside className={`fixed top-0 left-0 z-50 h-full w-64 bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transform transition-transform duration-300 lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex items-center justify-between h-16 px-4 border-b border-gray-200 dark:border-gray-700 bg-primary-900 dark:bg-primary-950">
-          <Link to="/" className="flex items-center gap-2">
+          <Link to="/dashboard" className="flex items-center gap-2">
             <div className="w-10 h-10 bg-white rounded-lg p-1 flex items-center justify-center">
               <img src={lucyLogo} alt="Lucy College" className="w-full h-full object-contain" />
             </div>
@@ -230,16 +244,18 @@ export default function Layout({ children }) {
 
           <div className="flex items-center gap-2 sm:gap-3">
             {/* Notification Bell - Student */}
-            {user?.role === 'STUDENT' && studentNotifications.unreadCount > 0 && (
+            {user?.role === 'STUDENT' && (
               <div className="relative">
                 <button
                   onClick={() => setShowNotificationDropdown(!showNotificationDropdown)}
                   className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white relative"
                 >
                   <Bell className="w-5 h-5" />
-                  <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full animate-bounce">
-                    {studentNotifications.unreadCount > 99 ? '99+' : studentNotifications.unreadCount}
-                  </span>
+                  {studentNotifications.unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full animate-bounce">
+                      {studentNotifications.unreadCount > 99 ? '99+' : studentNotifications.unreadCount}
+                    </span>
+                  )}
                 </button>
 
                 {/* Dropdown */}
@@ -266,6 +282,8 @@ export default function Layout({ children }) {
                             notif.type === 'REGISTRATION_OPEN' ? '/student/registration' :
                             notif.type === 'GRADE_PUBLISHED' ? '/student/results' :
                             notif.type === 'NEW_ASSESSMENT' ? '/my-classes' :
+                            notif.type === 'ASSESSMENT_OPENED' ? '/my-classes' :
+                            notif.type === 'ASSESSMENT_CREATED' ? '/my-classes' :
                             notif.type === 'ADD_DROP_APPROVED' ? '/student/my-courses' :
                             notif.type === 'ADD_DROP_REJECTED' ? '/student/add-drop' :
                             notif.type === 'QUESTION_REPORT_RESOLVED' ? '/student/my-reports' :
@@ -282,6 +300,57 @@ export default function Layout({ children }) {
                         </Link>
                       ))}
                       {studentNotifications.notifications.length === 0 && (
+                        <p className="p-4 text-center text-gray-500 text-sm">{t('nav.noNotifications')}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Notification Bell - Teacher */}
+            {user?.role === 'TEACHER' && (
+              <div className="relative">
+                <button
+                  onClick={() => setShowNotificationDropdown(!showNotificationDropdown)}
+                  className="p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg text-gray-500 dark:text-gray-300 hover:text-gray-700 dark:hover:text-white relative"
+                >
+                  <Bell className="w-5 h-5" />
+                  {teacherNotifications.unreadCount > 0 && (
+                    <span className="absolute -top-1 -right-1 flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-500 text-white text-[10px] font-bold rounded-full animate-bounce">
+                      {teacherNotifications.unreadCount > 99 ? '99+' : teacherNotifications.unreadCount}
+                    </span>
+                  )}
+                </button>
+                {showNotificationDropdown && (
+                  <div className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-gray-800 rounded-lg shadow-lg border border-gray-200 dark:border-gray-700 z-50 max-h-96 overflow-y-auto">
+                    <div className="p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                      <h3 className="font-semibold text-sm">{t('nav.notifications')}</h3>
+                      <button
+                        onClick={async () => {
+                          await markAllNotificationsRead();
+                          setTeacherNotifications({ ...teacherNotifications, unreadCount: 0, notifications: teacherNotifications.notifications.map(n => ({ ...n, isRead: true })) });
+                          setShowNotificationDropdown(false);
+                        }}
+                        className="text-xs text-blue-600 hover:underline"
+                      >
+                        {t('nav.markAllRead')}
+                      </button>
+                    </div>
+                    <div className="divide-y divide-gray-100 dark:divide-gray-700">
+                      {teacherNotifications.notifications.slice(0, 5).map(notif => (
+                        <div
+                          key={notif.id}
+                          className={`block p-3 hover:bg-gray-50 dark:hover:bg-gray-700 ${!notif.isRead ? 'bg-blue-50 dark:bg-blue-900/20' : ''}`}
+                        >
+                          <p className="text-sm font-medium">{notif.title}</p>
+                          <p className="text-xs text-gray-500 mt-1">{notif.message}</p>
+                          <p className="text-xs text-gray-400 mt-1">
+                            {new Date(notif.createdAt).toLocaleDateString()} {new Date(notif.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                          </p>
+                        </div>
+                      ))}
+                      {teacherNotifications.notifications.length === 0 && (
                         <p className="p-4 text-center text-gray-500 text-sm">{t('nav.noNotifications')}</p>
                       )}
                     </div>
